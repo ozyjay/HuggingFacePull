@@ -1122,7 +1122,7 @@ git commit -m "docs: add setup and usage guide"
 
 ## Open Design Decisions
 
-- Folder name: the current directory is `HugginFacePull`; keep the Python package correctly named `huggingface_pull` and consider renaming the folder to `HuggingFacePull` before first commit.
+- Folder name: use `HuggingFacePull` for the project directory and repository, while keeping the Python package correctly named `huggingface_pull`.
 - Progress fidelity: `huggingface_hub.snapshot_download()` handles concurrent file downloads and cache metadata, but does not expose the same simple per-blob callback as the Ollama registry downloader. First version should report phases accurately, then improve per-file progress only if needed.
 - Storage model: use a tool-owned library under `~/.cache/huggingfacepull/library` by default, while allowing users to use the standard Hugging Face cache via `HF_HOME` independently.
 - Auth: rely on locally saved Hugging Face tokens or `HF_TOKEN`; add an explicit token input only if there is a real workflow need.
