@@ -31,6 +31,18 @@ def blocked_process_pull(ref, **kwargs):
     time.sleep(30)
 
 
+def pause_boundary_process_pull(ref, **kwargs):
+    progress = kwargs["progress"]
+    progress({"type": "model-plan", "total_bytes": 20, "files": [{"path": "first.bin", "size": 10}, {"path": "second.bin", "size": 10}]})
+    progress({"type": "file-start", "path": "first.bin", "downloaded": 0, "total": 10})
+    time.sleep(0.2)
+    progress({"type": "file-complete", "path": "first.bin", "downloaded": 10, "total": 10})
+    if kwargs["stop_after_file"]():
+        raise hub.DownloadStoppedAfterFile
+    progress({"type": "file-start", "path": "second.bin", "downloaded": 0, "total": 10})
+    progress({"type": "file-complete", "path": "second.bin", "downloaded": 10, "total": 10})
+
+
 def test_add_creates_waiting_item(tmp_path):
     queue = DownloadQueue(library_dir=tmp_path, pull_func=lambda *args, **kwargs: None)
 
@@ -444,6 +456,29 @@ def test_pause_after_current_pauses_before_next_waiting_item(tmp_path):
     assert entered == ["first/model"]
     assert [item["status"] for item in snapshot["items"]] == ["completed", "waiting"]
     assert snapshot["pause_requested"] is True
+
+
+def test_pause_after_current_pauses_process_download_after_current_file(tmp_path):
+    queue = DownloadQueue(
+        library_dir=tmp_path,
+        pull_func=pause_boundary_process_pull,
+        hard_stop_downloads=True,
+    )
+    queue.add({"repo_id": "Qwen/Qwen3"})
+    queue.start()
+
+    assert wait_for(lambda: queue.snapshot()["items"][0]["progress"]["current_file"])
+    queue.pause_after_current()
+
+    assert queue.wait_until_idle(3)
+    snapshot = queue.snapshot()
+    [item] = snapshot["items"]
+    assert item["status"] == "waiting"
+    assert item["progress"]["phase"] == "paused"
+    assert item["progress"]["current_file"]["path"] == "first.bin"
+    assert item["messages"][-1]["text"] == "paused after current file"
+    assert snapshot["pause_requested"] is True
+    assert snapshot["stop_after_file_requested"] is False
 
 
 def test_pause_after_current_resets_to_idle_when_no_waiting_items_remain(tmp_path):

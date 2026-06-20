@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import fnmatch
 import json
 import os
 import shutil
@@ -8,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.constants import HF_HUB_CACHE
 from huggingface_hub.utils import tqdm as hf_tqdm
 
@@ -454,21 +455,79 @@ def pull_snapshot(
     previous_disable_xet = os.environ.get("HF_HUB_DISABLE_XET")
     os.environ["HF_HUB_DISABLE_XET"] = "1"
     try:
-        snapshot_path = Path(
-            snapshot_download(
+        api = HfApi(endpoint=endpoint)
+        info = api.model_info(
+            ref.repo_id,
+            revision=ref.revision,
+            files_metadata=True,
+            token=token,
+        )
+        files = _filter_repo_files(
+            [
+                {
+                    "path": sibling.rfilename,
+                    "size": sibling.size,
+                    "blob_id": getattr(sibling, "blob_id", None),
+                }
+                for sibling in info.siblings
+            ],
+            allow_patterns=ref.allow_patterns,
+            ignore_patterns=ref.ignore_patterns,
+        )
+        if progress is not None:
+            progress(
+                {
+                    "type": "model-plan",
+                    "repo_id": ref.repo_id,
+                    "revision": ref.revision,
+                    "total_bytes": _sum_file_sizes(files),
+                    "files": files,
+                }
+            )
+        target.mkdir(parents=True, exist_ok=True)
+        for file in files:
+            path = str(file["path"])
+            size = file.get("size")
+            blob_id = file.get("blob_id")
+            if progress is not None:
+                progress(
+                    {
+                        "type": "file-start",
+                        "repo_id": ref.repo_id,
+                        "path": path,
+                        "size": size,
+                        "blob_id": blob_id,
+                        "resume_at": _local_file_size(target / path),
+                    }
+                )
+            hf_hub_download(
                 repo_id=ref.repo_id,
+                filename=path,
                 revision=ref.revision,
                 repo_type=None if ref.repo_type == "model" else ref.repo_type,
                 local_dir=target,
-                allow_patterns=list(ref.allow_patterns) or None,
-                ignore_patterns=list(ref.ignore_patterns) or None,
                 endpoint=endpoint,
                 token=token,
-                tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
+                tqdm_class=_file_progress_tqdm_class(ref.repo_id, file, progress)
                 if progress is not None
                 else None,
             )
-        )
+            downloaded = _local_file_size(target / path)
+            if progress is not None:
+                progress(
+                    {
+                        "type": "file-complete",
+                        "repo_id": ref.repo_id,
+                        "path": path,
+                        "downloaded": downloaded,
+                        "total": size,
+                        "percent": 100.0 if size else None,
+                        "blob_id": blob_id,
+                    }
+                )
+            if stop_after_file is not None and stop_after_file():
+                raise DownloadStoppedAfterFile
+        snapshot_path = target
     finally:
         if previous_disable_xet is None:
             os.environ.pop("HF_HUB_DISABLE_XET", None)
@@ -493,9 +552,102 @@ def pull_snapshot(
                 "snapshot_path": str(snapshot_path),
             }
         )
-    if stop_after_file is not None and stop_after_file():
-        raise DownloadStoppedAfterFile
     return snapshot_path
+
+
+def _filter_repo_files(
+    files: list[dict[str, Any]],
+    *,
+    allow_patterns: tuple[str, ...] | list[str],
+    ignore_patterns: tuple[str, ...] | list[str],
+) -> list[dict[str, Any]]:
+    filtered = []
+    for file in files:
+        path = str(file["path"])
+        if allow_patterns and not _matches_any(path, allow_patterns):
+            continue
+        if ignore_patterns and _matches_any(path, ignore_patterns):
+            continue
+        filtered.append(file)
+    return filtered
+
+
+def _matches_any(path: str, patterns: tuple[str, ...] | list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def _sum_file_sizes(files: list[dict[str, Any]]) -> int | None:
+    sizes = [file.get("size") for file in files]
+    if not all(isinstance(size, int) for size in sizes):
+        return None
+    return sum(sizes)
+
+
+def _local_file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def _file_progress_tqdm_class(
+    repo_id: str,
+    file: dict[str, Any],
+    progress: ProgressCallback,
+) -> type[hf_tqdm]:
+    path = str(file["path"])
+    blob_id = file.get("blob_id")
+    size = file.get("size")
+    base_class = _progress_tqdm_class(repo_id, progress)
+
+    class FileProgressTqdm(base_class):
+        def _emit_download_progress(self, *, force: bool = False) -> None:
+            if getattr(self, "unit", None) != "B":
+                return
+            downloaded = _numeric_progress_value(getattr(self, "n", None))
+            total = _numeric_progress_value(getattr(self, "total", None))
+            if total is None and isinstance(size, int):
+                total = size
+            if downloaded is None and total is None:
+                return
+            signature = (downloaded, total)
+            if signature == getattr(self, "_hfp_last_signature", None):
+                return
+            now = time.monotonic()
+            last_emit_at = getattr(self, "_hfp_last_emit_at", None)
+            if (
+                not force
+                and last_emit_at is not None
+                and now - last_emit_at < PROGRESS_EMIT_INTERVAL_SECONDS
+            ):
+                return
+            rate = self.format_dict.get("rate")
+            speed = float(rate) if isinstance(rate, (int, float)) and rate > 0 else None
+            eta = None
+            if speed and total is not None and downloaded is not None:
+                eta = int(max(total - downloaded, 0) / speed)
+            percent = (
+                downloaded / total * 100
+                if downloaded is not None and total is not None and total > 0
+                else None
+            )
+            progress(
+                {
+                    "type": "file-progress",
+                    "repo_id": repo_id,
+                    "path": path,
+                    "downloaded": downloaded,
+                    "total": total,
+                    "percent": percent,
+                    "bytes_per_second": speed,
+                    "eta_seconds": eta,
+                    "blob_id": blob_id,
+                }
+            )
+            self._hfp_last_emit_at = now
+            self._hfp_last_signature = signature
+
+    return FileProgressTqdm
 
 
 def _progress_tqdm_class(

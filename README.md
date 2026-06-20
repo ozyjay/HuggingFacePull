@@ -47,3 +47,11 @@ Set `HUGGINGFACE_PULL_LIBRARY=/path/to/library` to use another location.
 ```
 
 Use `./scripts/test.ps1 -Install` to refresh the editable dev install before running tests.
+
+If running tests directly with the active `pyenv` interpreter, install the dev dependencies there too:
+
+```bash
+python3 -m pip install -e ".[dev]"
+```
+
+`httpx2` must be available in whichever interpreter imports `starlette.testclient`; otherwise pytest emits a Starlette deprecation warning about falling back to `httpx`.

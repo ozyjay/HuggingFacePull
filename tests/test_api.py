@@ -5,7 +5,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 import huggingface_pull.cli as cli_module
 from huggingface_pull.api import create_app

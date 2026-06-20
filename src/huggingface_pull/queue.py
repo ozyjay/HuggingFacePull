@@ -240,6 +240,11 @@ class DownloadQueue:
                     with self._condition:
                         if item["progress"]["phase"] == "completed":
                             item["status"] = "completed"
+                        elif self._pause_requested and not self._stop_after_file_requested:
+                            item["status"] = "waiting"
+                            item["progress"]["phase"] = "paused"
+                            self._append_message_locked(item, "paused after current file")
+                            self._log_item("download paused after current file", item)
                         else:
                             item["status"] = "stopped"
                             item["progress"]["phase"] = "stopped"
@@ -296,7 +301,8 @@ class DownloadQueue:
             endpoint=self.endpoint,
             token=self.token,
             progress=progress,
-            stop_after_file=self._stop_after_file_requested_locked,
+            hard_stop_requested=self._stop_after_file_requested_locked,
+            pause_after_file_requested=self._pause_requested_locked,
         )
 
     def _record_progress(self, item_id: str, event: dict[str, Any]) -> None:
@@ -530,6 +536,10 @@ class DownloadQueue:
         with self._condition:
             return self._stop_after_file_requested
 
+    def _pause_requested_locked(self) -> bool:
+        with self._condition:
+            return self._pause_requested
+
     def _clear_worker_locked(self) -> None:
         if self._worker is threading.current_thread():
             self._worker = None
@@ -608,21 +618,25 @@ def _run_pull_in_process(
     endpoint: str,
     token: str | None,
     progress: Callable[[dict[str, Any]], None],
-    stop_after_file: Callable[[], bool],
+    hard_stop_requested: Callable[[], bool],
+    pause_after_file_requested: Callable[[], bool],
 ) -> None:
     context = multiprocessing.get_context("spawn")
     events = context.Queue()
+    pause_after_file = context.Event()
     process = context.Process(
         target=_download_process_entry,
-        args=(pull_func, ref, Path(library_dir), endpoint, token, events),
+        args=(pull_func, ref, Path(library_dir), endpoint, token, events, pause_after_file),
         daemon=True,
     )
     process.start()
     try:
         while True:
-            if stop_after_file():
+            if hard_stop_requested():
                 _terminate_process(process)
                 raise DownloadForceStopped
+            if pause_after_file_requested():
+                pause_after_file.set()
             try:
                 kind, payload = events.get(timeout=PROCESS_EVENT_POLL_SECONDS)
             except queue_lib.Empty:
@@ -657,6 +671,7 @@ def _download_process_entry(
     endpoint: str,
     token: str | None,
     events: Any,
+    pause_after_file: Any,
 ) -> None:
     try:
         pull_func(
@@ -666,7 +681,7 @@ def _download_process_entry(
             token=token,
             dry_run=False,
             progress=lambda event: events.put(("progress", event)),
-            stop_after_file=lambda: False,
+            stop_after_file=pause_after_file.is_set,
         )
     except DownloadStoppedAfterFile:
         events.put(("stopped", None))
