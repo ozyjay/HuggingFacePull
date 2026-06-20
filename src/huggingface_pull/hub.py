@@ -12,12 +12,14 @@ from huggingface_hub import HfApi, snapshot_download
 from huggingface_hub.constants import HF_HUB_CACHE
 from huggingface_hub.utils import tqdm as hf_tqdm
 
+from .app_logging import write_log
 from .config import DEFAULT_ENDPOINT, safe_repo_dir_name
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 StopAfterFileCallback = Callable[[], bool]
 PROGRESS_EMIT_INTERVAL_SECONDS = 0.5
+_LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
 
 
 class DownloadStoppedAfterFile(Exception):
@@ -154,7 +156,8 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
         if refs:
             for revision, commit in refs.items():
                 snapshot = snapshots / commit
-                if snapshot.is_dir():
+                skip_reason = _cache_snapshot_skip_reason(snapshot)
+                if skip_reason is None:
                     cached.append(
                         {
                             "repo_id": repo_id,
@@ -164,9 +167,12 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
                             "source": "huggingface_cache",
                         }
                     )
+                else:
+                    _log_cache_snapshot_skipped(repo_id, revision, snapshot, skip_reason)
             continue
         for snapshot in sorted(snapshots.iterdir()):
-            if snapshot.is_dir():
+            skip_reason = _cache_snapshot_skip_reason(snapshot)
+            if skip_reason is None:
                 cached.append(
                     {
                         "repo_id": repo_id,
@@ -176,7 +182,51 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
                         "source": "huggingface_cache",
                     }
                 )
+            else:
+                _log_cache_snapshot_skipped(repo_id, snapshot.name, snapshot, skip_reason)
     return cached
+
+
+def _cache_snapshot_skip_reason(snapshot: Path) -> dict[str, Any] | None:
+    if not snapshot.is_dir():
+        return {"reason": "missing"}
+
+    found_file = False
+    for path in snapshot.rglob("*"):
+        if path.is_dir():
+            continue
+        if _is_partial_file(path):
+            return {"reason": "partial_file", "path": path}
+        if not path.exists():
+            return {
+                "reason": "broken_symlink" if path.is_symlink() else "missing_file",
+                "path": path,
+            }
+        if path.is_file():
+            found_file = True
+    if not found_file:
+        return {"reason": "empty"}
+    return None
+
+
+def _log_cache_snapshot_skipped(
+    repo_id: str,
+    revision: str,
+    snapshot: Path,
+    skip_reason: dict[str, Any],
+) -> None:
+    reason = str(skip_reason.get("reason", "unknown"))
+    key = (repo_id, revision, str(snapshot), reason)
+    if key in _LOGGED_SKIPPED_CACHE_SNAPSHOTS:
+        return
+    _LOGGED_SKIPPED_CACHE_SNAPSHOTS.add(key)
+    _log(
+        "cache snapshot skipped",
+        repo_id=repo_id,
+        revision=revision,
+        snapshot_path=snapshot,
+        **skip_reason,
+    )
 
 
 def _repo_id_from_cache_dir(name: str, prefix: str) -> str | None:
@@ -266,6 +316,13 @@ def _collect_stale_partials(root: Path, source: str, cutoff: float) -> list[dict
     return stale_partials
 
 
+def _log(message: str, /, **fields: Any) -> None:
+    try:
+        write_log(message, **fields)
+    except Exception:
+        pass
+
+
 def cleanup_library(
     library_dir: Path,
     delete: bool = False,
@@ -285,6 +342,15 @@ def cleanup_library(
                 seen_paths.add(resolved_path)
                 stale_partials.append(item)
 
+    _log(
+        "cleanup scanned",
+        library_dir=library_dir,
+        include_partials=include_partials,
+        older_than_days=older_than_days,
+        stale_partial_count=len(stale_partials),
+        delete=delete,
+    )
+
     deleted: list[str] = []
     if delete:
         for item in stale_partials:
@@ -294,6 +360,7 @@ def cleanup_library(
             except FileNotFoundError:
                 continue
             deleted.append(str(path))
+            _log("cleanup partial deleted", path=path, source=item["source"])
 
     return {
         "dry_run": not delete,

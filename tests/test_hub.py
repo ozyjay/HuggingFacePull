@@ -134,6 +134,110 @@ def test_cached_hub_models_reads_huggingface_cache_repos(tmp_path, monkeypatch):
     ]
 
 
+def test_cached_hub_models_skips_empty_snapshot_directories(tmp_path, monkeypatch):
+    log_events = []
+    cache = tmp_path / "hub"
+    model = cache / "models--Qwen--Qwen2.5-1.5B-Instruct"
+    snapshot = model / "snapshots" / "abc123"
+    ref = model / "refs" / "main"
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
+
+    assert hub.cached_hub_models() == []
+    assert log_events == [
+        (
+            "cache snapshot skipped",
+            {
+                "repo_id": "Qwen/Qwen2.5-1.5B-Instruct",
+                "revision": "main",
+                "snapshot_path": snapshot,
+                "reason": "empty",
+            },
+        )
+    ]
+
+
+def test_cached_hub_models_logs_repeated_skipped_snapshot_once(tmp_path, monkeypatch):
+    log_events = []
+    cache = tmp_path / "hub"
+    model = cache / "models--Qwen--Qwen2.5-1.5B-Instruct"
+    snapshot = model / "snapshots" / "abc123"
+    ref = model / "refs" / "main"
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
+    monkeypatch.setattr(hub, "_LOGGED_SKIPPED_CACHE_SNAPSHOTS", set())
+
+    assert hub.cached_hub_models() == []
+    assert hub.cached_hub_models() == []
+    assert [message for message, _ in log_events] == ["cache snapshot skipped"]
+
+
+def test_cached_hub_models_skips_snapshots_with_broken_blob_links(tmp_path, monkeypatch):
+    log_events = []
+    cache = tmp_path / "hub"
+    model = cache / "models--Qwen--Qwen2.5-1.5B-Instruct"
+    snapshot = model / "snapshots" / "abc123"
+    ref = model / "refs" / "main"
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    (snapshot / "model.safetensors").symlink_to("../../blobs/missing")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
+
+    assert hub.cached_hub_models() == []
+    assert log_events == [
+        (
+            "cache snapshot skipped",
+            {
+                "repo_id": "Qwen/Qwen2.5-1.5B-Instruct",
+                "revision": "main",
+                "snapshot_path": snapshot,
+                "reason": "broken_symlink",
+                "path": snapshot / "model.safetensors",
+            },
+        )
+    ]
+
+
+def test_cached_hub_models_skips_snapshots_with_valid_metadata_but_missing_weights(
+    tmp_path, monkeypatch
+):
+    cache = tmp_path / "hub"
+    model = cache / "models--Qwen--Qwen2.5-1.5B-Instruct"
+    snapshot = model / "snapshots" / "abc123"
+    ref = model / "refs" / "main"
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model.safetensors").symlink_to("../../blobs/missing")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    assert hub.cached_hub_models() == []
+
+
 def test_search_models_empty_query_returns_available_without_api(monkeypatch):
     monkeypatch.setattr(
         hub,
@@ -597,6 +701,7 @@ def test_cleanup_library_reports_and_deletes_stale_partials_only_when_enabled(mo
 
 
 def test_cleanup_library_includes_huggingface_cache_partials(monkeypatch, tmp_path):
+    log_events = []
     library_root = tmp_path / "library"
     library_partial = library_root / "Qwen--Qwen3" / "main" / "weights.bin.incomplete"
     cache_root = tmp_path / "hf-cache"
@@ -609,6 +714,12 @@ def test_cleanup_library_includes_huggingface_cache_partials(monkeypatch, tmp_pa
     cache_partial.write_bytes(b"cache")
     lock_file.write_bytes(b"lock")
     monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache_root))
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
 
     dry_run = hub.cleanup_library(library_root, include_partials=True, older_than_days=0)
 
@@ -629,6 +740,30 @@ def test_cleanup_library_includes_huggingface_cache_partials(monkeypatch, tmp_pa
     assert not library_partial.exists()
     assert not cache_partial.exists()
     assert lock_file.exists()
+    assert log_events == [
+        (
+            "cleanup scanned",
+            {
+                "library_dir": library_root,
+                "include_partials": True,
+                "older_than_days": 0,
+                "stale_partial_count": 2,
+                "delete": False,
+            },
+        ),
+        (
+            "cleanup scanned",
+            {
+                "library_dir": library_root,
+                "include_partials": True,
+                "older_than_days": 0,
+                "stale_partial_count": 2,
+                "delete": True,
+            },
+        ),
+        ("cleanup partial deleted", {"path": library_partial, "source": "library"}),
+        ("cleanup partial deleted", {"path": cache_partial, "source": "huggingface_cache"}),
+    ]
 
 
 def test_directory_size_sums_nested_files(tmp_path):

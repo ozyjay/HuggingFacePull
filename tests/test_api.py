@@ -294,6 +294,7 @@ def test_cleanup_scan_and_delete_delegate(monkeypatch, tmp_path):
 def test_run_web_constructs_uvicorn_server_and_opens_browser_on_startup(monkeypatch, tmp_path):
     calls = []
     opened = []
+    log_events = []
 
     class FakeConfig:
         def __init__(self, app, host, port, log_level):
@@ -319,6 +320,12 @@ def test_run_web_constructs_uvicorn_server_and_opens_browser_on_startup(monkeypa
 
     monkeypatch.setattr(cli_module, "uvicorn", FakeUvicorn)
     monkeypatch.setattr(cli_module.webbrowser, "open", opened.append)
+    monkeypatch.setattr(
+        cli_module,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
 
     result = cli_module.run_web(["--host", "0.0.0.0", "--port", "8123", "--library-dir", str(tmp_path)])
 
@@ -330,6 +337,17 @@ def test_run_web_constructs_uvicorn_server_and_opens_browser_on_startup(monkeypa
     assert config.port == 8123
     assert config.log_level == "warning"
     assert config.app.state.queue.library_dir == tmp_path
+    assert log_events == [
+        (
+            "web server starting",
+            {
+                "host": "0.0.0.0",
+                "port": 8123,
+                "library_dir": tmp_path,
+                "endpoint": "https://huggingface.co",
+            },
+        )
+    ]
 
 
 def test_run_web_uses_localhost_browser_url_for_ipv6_wildcard(monkeypatch, tmp_path):

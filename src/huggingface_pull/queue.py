@@ -13,6 +13,8 @@ from .hub import DownloadStoppedAfterFile, HubRef, canonical_ref, pull_snapshot
 
 
 PullFunc = Callable[..., Any]
+PROGRESS_LOG_INTERVAL_SECONDS = 30.0
+PROGRESS_LOG_PERCENT_STEP = 5.0
 
 
 def _empty_progress() -> dict[str, Any]:
@@ -42,6 +44,8 @@ class DownloadQueue:
         self._worker: threading.Thread | None = None
         self._pause_requested = False
         self._stop_after_file_requested = False
+        self._last_progress_log_at: dict[str, float] = {}
+        self._last_progress_log_percent: dict[str, float] = {}
 
     def add(self, payload: dict[str, Any]) -> dict[str, Any]:
         ref = self._hub_ref_from_payload(payload)
@@ -54,6 +58,13 @@ class DownloadQueue:
                 if existing["status"] in {"waiting", "running", "completed", "failed"}:
                     copied = self._copy_item(existing)
                     copied["deduplicated"] = True
+                    self._log(
+                        "queue item deduplicated",
+                        item_id=copied["id"],
+                        repo_id=copied["repo_id"],
+                        revision=copied["revision"],
+                        repo_type=copied["repo_type"],
+                    )
                     return copied
 
             item = {
@@ -77,17 +88,28 @@ class DownloadQueue:
                 "updated_at": now,
             }
             self._items.append(item)
+            self._log(
+                "queue item added",
+                item_id=item["id"],
+                repo_id=item["repo_id"],
+                revision=item["revision"],
+                repo_type=item["repo_type"],
+                allow_patterns=list(item["allow_patterns"]),
+                ignore_patterns=list(item["ignore_patterns"]),
+            )
             self._condition.notify_all()
             return self._copy_item(item)
 
     def start(self) -> None:
         with self._condition:
             if self._worker is not None:
+                self._log("worker already running", library_dir=self.library_dir)
                 return
             self._pause_requested = False
             self._stop_after_file_requested = False
             worker = threading.Thread(target=self._run_worker, daemon=True)
             self._worker = worker
+            self._log("worker started", library_dir=self.library_dir, endpoint=self.endpoint)
         try:
             worker.start()
         except Exception:
@@ -100,12 +122,14 @@ class DownloadQueue:
     def pause_after_current(self) -> None:
         with self._condition:
             self._pause_requested = True
+            self._log("pause requested", library_dir=self.library_dir)
             self._condition.notify_all()
 
     def stop_after_current_file(self) -> dict[str, Any]:
         with self._condition:
             self._pause_requested = True
             self._stop_after_file_requested = True
+            self._log("stop after current file requested", library_dir=self.library_dir)
             self._condition.notify_all()
             return self.snapshot()
 
@@ -122,6 +146,13 @@ class DownloadQueue:
             item["_planned_file_order"] = []
             item["_completed_files"] = {}
             item["updated_at"] = time.time()
+            self._log(
+                "queue item retry requested",
+                item_id=item["id"],
+                repo_id=item["repo_id"],
+                revision=item["revision"],
+                repo_type=item["repo_type"],
+            )
             self._condition.notify_all()
             return self._copy_item(item)
 
@@ -133,6 +164,14 @@ class DownloadQueue:
                 if item["status"] == "running":
                     raise ValueError("Running items cannot be removed")
                 removed = self._items.pop(index)
+                self._log(
+                    "queue item removed",
+                    item_id=removed["id"],
+                    repo_id=removed["repo_id"],
+                    revision=removed["revision"],
+                    repo_type=removed["repo_type"],
+                    status=removed["status"],
+                )
                 self._condition.notify_all()
                 return self._copy_item(removed)
         raise KeyError(item_id)
@@ -171,14 +210,17 @@ class DownloadQueue:
             while True:
                 with self._condition:
                     if self._pause_requested:
+                        self._log("worker paused", library_dir=self.library_dir)
                         self._clear_worker_locked()
                         return
                     item = self._next_waiting_item()
                     if item is None:
+                        self._log("worker idle", library_dir=self.library_dir)
                         self._clear_worker_locked()
                         return
                     item["status"] = "running"
                     item["updated_at"] = time.time()
+                    self._log_item("download started", item)
                     self._condition.notify_all()
 
                 try:
@@ -201,6 +243,7 @@ class DownloadQueue:
                             item["status"] = "waiting"
                             item["progress"]["phase"] = "waiting"
                             self._append_message_locked(item, "stopped after current snapshot")
+                            self._log_item("download stopped after current file", item)
                         self._stop_after_file_requested = False
                         item["updated_at"] = time.time()
                         self._condition.notify_all()
@@ -211,20 +254,19 @@ class DownloadQueue:
                         item["progress"]["phase"] = "failed"
                         self._append_message_locked(item, f"failed: {error}")
                         item["updated_at"] = time.time()
+                        self._log_item("download failed", item, error=error)
                         self._condition.notify_all()
-                    try:
-                        write_log("download failed", repo_id=item["repo_id"], error=error)
-                    except Exception:
-                        pass
                 else:
                     with self._condition:
                         item["status"] = "completed"
                         self._complete_progress_locked(item)
                         item["updated_at"] = time.time()
+                        self._log_item("download completed", item)
                         self._condition.notify_all()
         finally:
             with self._condition:
                 self._clear_worker_locked()
+                self._log("worker exited", library_dir=self.library_dir)
                 self._condition.notify_all()
 
     def _record_progress(self, item_id: str, event: dict[str, Any]) -> None:
@@ -234,6 +276,7 @@ class DownloadQueue:
             if event_type is not None and event_type != "download-progress":
                 self._append_message_locked(item, str(event_type))
             self._update_progress_locked(item, event)
+            self._log_progress_event_locked(item, event)
             item["updated_at"] = time.time()
             self._condition.notify_all()
 
@@ -474,3 +517,49 @@ class DownloadQueue:
             else None,
         }
         return copied
+
+    def _log_item(self, message: str, item: dict[str, Any], **fields: Any) -> None:
+        self._log(
+            message,
+            item_id=item["id"],
+            repo_id=item["repo_id"],
+            revision=item["revision"],
+            repo_type=item["repo_type"],
+            **fields,
+        )
+
+    def _log_progress_event_locked(self, item: dict[str, Any], event: dict[str, Any]) -> None:
+        if event.get("type") != "download-progress":
+            return
+        percent = event.get("percent")
+        now = time.monotonic()
+        last_at = self._last_progress_log_at.get(item["id"])
+        last_percent = self._last_progress_log_percent.get(item["id"])
+
+        should_log = last_at is None
+        if not should_log and isinstance(percent, (int, float)) and isinstance(
+            last_percent, (int, float)
+        ):
+            should_log = abs(float(percent) - last_percent) >= PROGRESS_LOG_PERCENT_STEP
+        if not should_log and last_at is not None:
+            should_log = now - last_at >= PROGRESS_LOG_INTERVAL_SECONDS
+        if not should_log:
+            return
+
+        self._last_progress_log_at[item["id"]] = now
+        if isinstance(percent, (int, float)):
+            self._last_progress_log_percent[item["id"]] = float(percent)
+        self._log(
+            "download progress",
+            item_id=item["id"],
+            repo_id=item["repo_id"],
+            downloaded=event.get("downloaded"),
+            total=event.get("total"),
+            percent=percent,
+        )
+
+    def _log(self, message: str, /, **fields: Any) -> None:
+        try:
+            write_log(message, **fields)
+        except Exception:
+            pass

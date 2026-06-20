@@ -85,6 +85,78 @@ def test_add_deduplicates_implicit_same_canonical_payload(tmp_path):
     assert len(queue.snapshot()["items"]) == 1
 
 
+def test_queue_logs_download_lifecycle(monkeypatch, tmp_path):
+    log_events = []
+    monkeypatch.setattr(
+        queue_module,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+    )
+
+    def fake_pull(ref, **kwargs):
+        kwargs["progress"]({"type": "manifest-fetch", "repo_id": ref.repo_id})
+        kwargs["progress"](
+            {
+                "type": "download-progress",
+                "repo_id": ref.repo_id,
+                "downloaded": 5,
+                "total": 10,
+                "percent": 50.0,
+            }
+        )
+
+    queue = DownloadQueue(library_dir=tmp_path, pull_func=fake_pull)
+    item = queue.add({"repo_id": "Qwen/Qwen3"})
+
+    queue.start()
+
+    assert queue.wait_until_idle(2)
+    assert log_events == [
+        (
+            "queue item added",
+            {
+                "item_id": item["id"],
+                "repo_id": "Qwen/Qwen3",
+                "revision": "main",
+                "repo_type": "model",
+                "allow_patterns": [],
+                "ignore_patterns": [],
+            },
+        ),
+        ("worker started", {"library_dir": tmp_path, "endpoint": "https://huggingface.co"}),
+        (
+            "download started",
+            {
+                "item_id": item["id"],
+                "repo_id": "Qwen/Qwen3",
+                "revision": "main",
+                "repo_type": "model",
+            },
+        ),
+        (
+            "download progress",
+            {
+                "item_id": item["id"],
+                "repo_id": "Qwen/Qwen3",
+                "downloaded": 5,
+                "total": 10,
+                "percent": 50.0,
+            },
+        ),
+        (
+            "download completed",
+            {
+                "item_id": item["id"],
+                "repo_id": "Qwen/Qwen3",
+                "revision": "main",
+                "repo_type": "model",
+            },
+        ),
+        ("worker idle", {"library_dir": tmp_path}),
+        ("worker exited", {"library_dir": tmp_path}),
+    ]
+
+
 def test_worker_runs_one_item_at_a_time(tmp_path):
     entered = []
     active = 0
@@ -239,7 +311,25 @@ def test_failure_marks_item_failed_and_retry_resets_to_waiting(monkeypatch, tmp_
     assert failed["error"] == "download broke"
     assert failed["progress"]["phase"] == "failed"
     assert failed["messages"][-1]["text"] == "failed: download broke"
-    assert log_events == [("download failed", {"repo_id": "broken/model", "error": mock.ANY})]
+    assert (
+        "download failed",
+        {
+            "item_id": item["id"],
+            "repo_id": "broken/model",
+            "revision": "main",
+            "repo_type": "model",
+            "error": mock.ANY,
+        },
+    ) in log_events
+    assert (
+        "queue item retry requested",
+        {
+            "item_id": item["id"],
+            "repo_id": "broken/model",
+            "revision": "main",
+            "repo_type": "model",
+        },
+    ) in log_events
     assert retried["status"] == "waiting"
     assert retried["error"] is None
     assert retried["messages"] == []

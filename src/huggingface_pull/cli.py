@@ -8,6 +8,7 @@ from pathlib import Path
 import uvicorn
 
 from .api import create_app
+from .app_logging import write_log
 from .config import DEFAULT_ENDPOINT, default_library_dir
 from .hub import HubRef, cleanup_library, pull_snapshot
 
@@ -62,6 +63,13 @@ def _browser_url(host: str, port: int) -> str:
     return f"http://{browser_host}:{port}/"
 
 
+def _log(message: str, /, **fields: object) -> None:
+    try:
+        write_log(message, **fields)
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["gc"]:
@@ -107,6 +115,13 @@ def run_web(argv: list[str] | None = None) -> int:
     args = build_web_parser().parse_args(argv)
     app = create_app(library_dir=args.library_dir.expanduser())
     browser_url = _browser_url(args.host, args.port)
+    _log(
+        "web server starting",
+        host=args.host,
+        port=args.port,
+        library_dir=args.library_dir.expanduser(),
+        endpoint=DEFAULT_ENDPOINT,
+    )
 
     def open_browser() -> None:
         webbrowser.open(browser_url)
