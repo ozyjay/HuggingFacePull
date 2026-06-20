@@ -150,6 +150,42 @@ def test_stop_after_file_returns_running_item_to_waiting_for_pre_complete_cooper
     assert stopped_item["messages"][-1]["text"] == "stopped after current snapshot"
 
 
+def test_stop_after_file_during_progress_returns_item_to_waiting(tmp_path):
+    release_progress = threading.Event()
+    stop_observed = threading.Event()
+
+    def fake_pull(ref, **kwargs):
+        kwargs["progress"](
+            {
+                "type": "download-progress",
+                "repo_id": ref.repo_id,
+                "downloaded": 10,
+                "total": 100,
+                "percent": 10.0,
+            }
+        )
+        assert release_progress.wait(2)
+        if kwargs["stop_after_file"]():
+            stop_observed.set()
+            raise hub.DownloadStoppedAfterFile
+
+    queue = DownloadQueue(library_dir=tmp_path, pull_func=fake_pull)
+    queue.add({"repo_id": "Qwen/Qwen3"})
+    queue.start()
+
+    assert wait_for(lambda: queue.snapshot()["items"][0]["progress"]["phase"] == "downloading")
+    queue.stop_after_current_file()
+    release_progress.set()
+
+    assert queue.wait_until_idle(2)
+    assert stop_observed.is_set()
+    snapshot = queue.snapshot()
+    [item] = snapshot["items"]
+    assert item["status"] == "waiting"
+    assert item["progress"]["phase"] == "waiting"
+    assert snapshot["stop_after_file_requested"] is False
+
+
 def test_stop_after_file_keeps_model_complete_item_completed_for_current_hub_semantics(
     tmp_path,
 ):
@@ -356,6 +392,45 @@ def test_progress_tracks_manifest_model_plan_file_progress_and_model_complete(tm
         "file-complete",
         "model-complete",
     ]
+
+
+def test_progress_tracks_aggregate_download_progress(tmp_path):
+    queue = DownloadQueue(library_dir=tmp_path, pull_func=lambda *args, **kwargs: None)
+    item = queue.add({"repo_id": "Qwen/Qwen3"})
+
+    queue._record_progress(
+        item["id"],
+        {
+            "type": "download-progress",
+            "repo_id": "Qwen/Qwen3",
+            "downloaded": 5,
+            "total": 20,
+            "percent": 25.0,
+            "bytes_per_second": 10.0,
+            "eta_seconds": 2,
+        },
+    )
+
+    progress = queue.snapshot()["items"][0]["progress"]
+    assert progress == {
+        "phase": "downloading",
+        "overall": {
+            "downloaded": 5,
+            "total": 20,
+            "percent": 25.0,
+            "bytes_per_second": 10.0,
+            "eta_seconds": 2,
+        },
+        "current_file": {
+            "name": "snapshot",
+            "downloaded": 5,
+            "total": 20,
+            "percent": 25.0,
+            "bytes_per_second": 10.0,
+            "eta_seconds": 2,
+        },
+    }
+    assert queue.snapshot()["items"][0]["messages"] == []
 
 
 def test_concurrent_start_calls_reserve_single_worker_slot(tmp_path):

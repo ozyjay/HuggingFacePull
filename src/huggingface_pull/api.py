@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from .config import DEFAULT_ENDPOINT, default_library_dir
-from .hub import HubRef, cleanup_library, remove_installed_model, repo_files, search_models
+from .hub import HubRef, cached_hub_models, cleanup_library, installed_models, remove_installed_model, repo_files, search_models
 from .models import CleanupRequest, InstalledRemoveRequest, QueueRequest
 from .queue import DownloadQueue
 
@@ -30,7 +30,9 @@ def create_app(
 
     @app.get("/api/state")
     def state() -> dict[str, Any]:
-        return queue.snapshot()
+        snapshot = queue.snapshot()
+        snapshot["cached_models"] = cached_hub_models()
+        return snapshot
 
     @app.get("/api/search")
     def search(q: str = "") -> dict[str, Any]:
@@ -55,6 +57,24 @@ def create_app(
 
     @app.post("/api/queue")
     def add(payload: QueueRequest) -> dict[str, Any]:
+        requested = payload.model_dump()
+        for installed in installed_models(queue.library_dir):
+            if (
+                installed.get("repo_id") == requested["repo_id"]
+                and installed.get("revision", "main") == requested["revision"]
+                and installed.get("repo_type", "model") == requested["repo_type"]
+            ):
+                raise HTTPException(status_code=409, detail="Snapshot is already installed")
+        for cached in cached_hub_models():
+            if (
+                cached.get("repo_id") == requested["repo_id"]
+                and cached.get("revision", requested["revision"]) == requested["revision"]
+                and cached.get("repo_type", "model") == requested["repo_type"]
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Model is already available in the Hugging Face cache",
+                )
         return queue.add(payload.model_dump())
 
     @app.post("/api/start")

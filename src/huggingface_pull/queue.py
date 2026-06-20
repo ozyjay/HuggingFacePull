@@ -231,7 +231,7 @@ class DownloadQueue:
         with self._condition:
             item = self._find_item(item_id)
             event_type = event.get("type")
-            if event_type is not None:
+            if event_type is not None and event_type != "download-progress":
                 self._append_message_locked(item, str(event_type))
             self._update_progress_locked(item, event)
             item["updated_at"] = time.time()
@@ -279,6 +279,14 @@ class DownloadQueue:
                 item["_completed_files"][identifier] = event.get("total") or event.get("downloaded")
             progress["current_file"] = self._file_progress_from_event(item, event)
             self._refresh_overall_locked(item)
+            return
+        if event_type == "download-progress":
+            progress["phase"] = "downloading"
+            progress["overall"] = self._aggregate_progress_from_event(event)
+            progress["current_file"] = {
+                "name": "snapshot",
+                **self._aggregate_progress_from_event(event),
+            }
             return
         if event_type in {"failure", "failed", "error"}:
             progress["phase"] = "failed"
@@ -354,6 +362,20 @@ class DownloadQueue:
 
     def _event_speed(self, event: dict[str, Any]) -> Any:
         return event.get("bytes_per_second", event.get("bytes_per_s"))
+
+    def _aggregate_progress_from_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        aggregate = {
+            "downloaded": event.get("downloaded"),
+            "total": event.get("total"),
+            "percent": event.get("percent"),
+        }
+        speed = self._event_speed(event)
+        if speed is not None:
+            aggregate["bytes_per_second"] = speed
+        eta = event.get("eta_seconds")
+        if eta is not None:
+            aggregate["eta_seconds"] = eta
+        return aggregate
 
     def _file_position_fields(
         self, item: dict[str, Any], identifier: str | None

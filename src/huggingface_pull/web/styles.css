@@ -48,6 +48,14 @@ button:hover {
   background: var(--accent-strong);
 }
 
+button:disabled,
+button:disabled:hover {
+  border-color: var(--strong-line);
+  background: var(--panel-soft);
+  color: var(--muted);
+  cursor: default;
+}
+
 button.secondary {
   background: #fff;
   color: var(--accent-strong);
@@ -281,6 +289,18 @@ small {
   margin: 4px 0 8px;
 }
 
+.download-status {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.detail-status-line {
+  color: var(--text);
+}
+
 .row-actions {
   display: flex;
   gap: 8px;
@@ -327,6 +347,10 @@ small {
   min-width: 0;
   background: var(--accent);
   transition: width 160ms ease;
+}
+
+.detail-progress {
+  height: 11px;
 }
 
 .file-list ul,

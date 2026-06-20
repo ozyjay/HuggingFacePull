@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import huggingface_pull.cli as cli_module
 from huggingface_pull.api import create_app
+from huggingface_pull.hub import HubRef, metadata_path
 from huggingface_pull.queue import DownloadQueue
 
 
@@ -56,6 +57,38 @@ def test_queue_endpoint_queues_repo(tmp_path):
     assert response.status_code == 200
     assert response.json()["repo_id"] == "Qwen/Qwen3"
     assert response.json()["status"] == "waiting"
+
+
+def test_queue_endpoint_rejects_installed_snapshot(tmp_path):
+    marker = metadata_path(tmp_path, HubRef(repo_id="Qwen/Qwen3", revision="main"))
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        '{"repo_id":"Qwen/Qwen3","revision":"main","repo_type":"model"}\n',
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(library_dir=tmp_path))
+
+    response = client.post("/api/queue", json={"repo_id": "Qwen/Qwen3"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Snapshot is already installed"
+
+
+def test_queue_endpoint_rejects_cached_hub_model(monkeypatch, tmp_path):
+    import huggingface_pull.api as api_module
+
+    monkeypatch.setattr(api_module, "installed_models", lambda library_dir: [])
+    monkeypatch.setattr(
+        api_module,
+        "cached_hub_models",
+        lambda: [{"repo_id": "Qwen/Qwen2.5-0.5B", "repo_type": "model"}],
+    )
+    client = TestClient(create_app(library_dir=tmp_path))
+
+    response = client.post("/api/queue", json={"repo_id": "Qwen/Qwen2.5-0.5B"})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Model is already available in the Hugging Face cache"
 
 
 def test_bad_queue_body_returns_422(tmp_path):

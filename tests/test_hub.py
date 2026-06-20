@@ -111,6 +111,29 @@ def test_installed_models_reads_metadata_skips_malformed_and_sorts(tmp_path):
     ]
 
 
+def test_cached_hub_models_reads_huggingface_cache_repos(tmp_path, monkeypatch):
+    cache = tmp_path / "hub"
+    model = cache / "models--Qwen--Qwen2.5-0.5B"
+    snapshot = model / "snapshots" / "abc123"
+    ref = model / "refs" / "main"
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (cache / "datasets--user--data" / "snapshots" / "def456").mkdir(parents=True)
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    assert hub.cached_hub_models() == [
+        {
+            "repo_id": "Qwen/Qwen2.5-0.5B",
+            "revision": "main",
+            "repo_type": "model",
+            "snapshot_path": str(snapshot),
+            "source": "huggingface_cache",
+        }
+    ]
+
+
 def test_search_models_empty_query_returns_available_without_api(monkeypatch):
     monkeypatch.setattr(
         hub,
@@ -296,8 +319,10 @@ def test_pull_snapshot_downloads_and_writes_metadata_without_network(monkeypatch
             "ignore_patterns": None,
             "endpoint": "https://hf.example",
             "token": "secret",
+            "tqdm_class": calls[0]["tqdm_class"],
         }
     ]
+    assert issubclass(calls[0]["tqdm_class"], hub.hf_tqdm)
     metadata = json.loads(hub.metadata_path(tmp_path, ref).read_text(encoding="utf-8"))
     assert metadata == {
         "repo_id": "Qwen/Qwen3",
@@ -310,6 +335,139 @@ def test_pull_snapshot_downloads_and_writes_metadata_without_network(monkeypatch
         {"type": "manifest-fetch", "repo_id": "Qwen/Qwen3", "revision": "v1"},
         {"type": "model-complete", "repo_id": "Qwen/Qwen3", "snapshot_path": str(target)},
     ]
+
+
+def test_pull_snapshot_emits_byte_progress_from_hub_tqdm(monkeypatch, tmp_path):
+    def fake_snapshot_download(**kwargs):
+        progress_bar = kwargs["tqdm_class"](
+            total=10,
+            initial=2,
+            unit="B",
+            desc="Downloading",
+        )
+        progress_bar.update(3)
+        progress_bar.total += 5
+        progress_bar.refresh()
+        progress_bar.update(10)
+        progress_bar.close()
+
+        local_dir = Path(kwargs["local_dir"])
+        local_dir.mkdir(parents=True)
+        (local_dir / "weights.bin").write_bytes(b"123")
+        return local_dir
+
+    monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
+    events = []
+
+    hub.pull_snapshot(
+        hub.HubRef(repo_id="Qwen/Qwen3"),
+        library_dir=tmp_path,
+        progress=events.append,
+    )
+
+    progress_events = [event for event in events if event["type"] == "download-progress"]
+    assert progress_events == [
+        {
+            "type": "download-progress",
+            "repo_id": "Qwen/Qwen3",
+            "downloaded": 2,
+            "total": 10,
+            "percent": 20.0,
+            "bytes_per_second": None,
+            "eta_seconds": None,
+        },
+        {
+            "type": "download-progress",
+            "repo_id": "Qwen/Qwen3",
+            "downloaded": 5,
+            "total": 15,
+            "percent": 33.33333333333333,
+            "bytes_per_second": None,
+            "eta_seconds": None,
+        },
+        {
+            "type": "download-progress",
+            "repo_id": "Qwen/Qwen3",
+            "downloaded": 15,
+            "total": 15,
+            "percent": 100.0,
+            "bytes_per_second": None,
+            "eta_seconds": None,
+        },
+    ]
+
+
+def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
+    ticks = iter([0.0, 0.0, 0.1, 0.2, 0.3, 0.4])
+    monkeypatch.setattr(hub.time, "monotonic", lambda: next(ticks, 0.4))
+
+    def fake_snapshot_download(**kwargs):
+        progress_bar = kwargs["tqdm_class"](total=100, initial=0, unit="B")
+        for _ in range(4):
+            progress_bar.update(10)
+        progress_bar.close()
+
+        local_dir = Path(kwargs["local_dir"])
+        local_dir.mkdir(parents=True)
+        return local_dir
+
+    monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
+    events = []
+
+    hub.pull_snapshot(
+        hub.HubRef(repo_id="Qwen/Qwen3"),
+        library_dir=tmp_path,
+        progress=events.append,
+    )
+
+    progress_events = [event for event in events if event["type"] == "download-progress"]
+    assert progress_events == [
+        {
+            "type": "download-progress",
+            "repo_id": "Qwen/Qwen3",
+            "downloaded": 0,
+            "total": 100,
+            "percent": 0.0,
+            "bytes_per_second": None,
+            "eta_seconds": None,
+        },
+        {
+            "type": "download-progress",
+            "repo_id": "Qwen/Qwen3",
+            "downloaded": 40,
+            "total": 100,
+            "percent": 40.0,
+            "bytes_per_second": None,
+            "eta_seconds": None,
+        },
+    ]
+
+
+def test_pull_snapshot_stops_during_hub_progress_when_requested(monkeypatch, tmp_path):
+    stop_requested = False
+
+    def fake_snapshot_download(**kwargs):
+        progress_bar = kwargs["tqdm_class"](total=100, initial=0, unit="B")
+        progress_bar.update(10)
+
+        nonlocal stop_requested
+        stop_requested = True
+        progress_bar.update(10)
+
+        pytest.fail("download should stop during progress update")
+
+    monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
+    ref = hub.HubRef(repo_id="Qwen/Qwen3")
+
+    with pytest.raises(hub.DownloadStoppedAfterFile):
+        hub.pull_snapshot(
+            ref,
+            library_dir=tmp_path,
+            progress=lambda event: None,
+            stop_after_file=lambda: stop_requested,
+        )
+
+    assert not hub.metadata_path(tmp_path, ref).exists()
 
 
 def test_pull_snapshot_raises_stop_after_file_after_metadata(monkeypatch, tmp_path):

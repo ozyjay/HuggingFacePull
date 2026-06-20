@@ -58,7 +58,7 @@
   function bindEvents() {
     els.startQueue.addEventListener("click", () => postAndRefresh("/api/start", "Queue started"));
     els.pauseQueue.addEventListener("click", () => postAndRefresh("/api/pause", "Pause requested"));
-    els.stopAfterFile.addEventListener("click", () => postAndRefresh("/api/stop-after-file", "Stop requested"));
+    els.stopAfterFile.addEventListener("click", () => postAndRefresh("/api/stop-after-file", "Stop requested after current file or snapshot"));
     els.searchForm.addEventListener("submit", onSearch);
     els.addForm.addEventListener("submit", onAddRepo);
     els.inspectFiles.addEventListener("click", onInspectFiles);
@@ -122,7 +122,7 @@
     els.runtimeSummary.textContent = snapshot.library_dir
       ? `Library directory: ${snapshot.library_dir} | Hub endpoint: ${snapshot.endpoint || "unknown"}`
       : "Loading local state...";
-    els.queueSummary.textContent = `${items.length} item${items.length === 1 ? "" : "s"} | ${snapshot.running ? "running" : "idle"}`;
+    els.queueSummary.textContent = `${items.length} item${items.length === 1 ? "" : "s"} | ${queueRunState(snapshot)}`;
     els.installedSummary.textContent = `${installed.length} snapshot${installed.length === 1 ? "" : "s"}`;
     els.searchStatus.textContent = state.searchError || `${state.searchResults.length} result${state.searchResults.length === 1 ? "" : "s"}`;
     els.detailStatus.textContent = selected ? selected.status : "";
@@ -246,6 +246,13 @@
 
     els.searchResults.innerHTML = state.searchResults.map((result) => {
       const repoId = result.repo_id || result.name || "";
+      const installed = isInstalledSnapshot(
+        (state.snapshot && state.snapshot.installed_models) || [],
+        (state.snapshot && state.snapshot.cached_models) || [],
+        repoId,
+        els.revisionInput.value.trim() || "main",
+        els.repoTypeInput.value || "model",
+      );
       const meta = [
         result.pipeline_tag,
         formatCount(result.downloads, "download"),
@@ -257,7 +264,9 @@
             <strong>${escapeHtml(repoId)}</strong>
             <small>${escapeHtml(meta || "Hub repo")}</small>
           </div>
-          <button type="button" data-add-search="${escapeAttr(repoId)}">Add</button>
+          ${installed
+            ? `<button type="button" class="secondary" disabled>Installed</button>`
+            : `<button type="button" data-add-search="${escapeAttr(repoId)}">Add</button>`}
         </article>
       `;
     }).join("");
@@ -318,6 +327,7 @@
     els.queueRows.innerHTML = items.map((item) => {
       const overall = (item.progress && item.progress.overall) || {};
       const percent = normalisePercent(overall.percent);
+      const statusLine = downloadStatusLine(item);
       return `
         <article class="queue-row ${state.selectedItemId === item.id ? "selected" : ""}" data-select-item="${escapeAttr(item.id)}">
           <div class="queue-main">
@@ -325,10 +335,13 @@
               <strong>${escapeHtml(item.repo_id)}</strong>
               <span class="badge ${statusClass(item.status)}">${escapeHtml(item.status)}</span>
             </div>
+            <p class="download-status">${escapeHtml(statusLine)}</p>
             <div class="row-meta">
               <span>${escapeHtml(item.revision || "main")}</span>
-              <span>${formatBytes(overall.downloaded)} / ${formatBytes(overall.total)}</span>
+              <span>${formatProgressAmount(overall)}</span>
+              <span>${formatPercent(overall.percent)}</span>
               <span>${formatSpeed(overall.bytes_per_second)}</span>
+              <span>ETA ${formatDuration(overall.eta_seconds)}</span>
             </div>
             <div class="progress" aria-label="Progress">
               <span style="width: ${percent}%"></span>
@@ -402,6 +415,7 @@
       return;
     }
     const progress = item.progress || {};
+    const overall = progress.overall || {};
     const current = progress.current_file;
     const messages = Array.isArray(item.messages) ? item.messages.slice(-12) : [];
     els.detailPanel.innerHTML = `
@@ -410,11 +424,19 @@
           <h3>${escapeHtml(item.repo_id)}</h3>
           <p>${escapeHtml(item.revision || "main")} | ${escapeHtml(item.repo_type || "model")}</p>
         </div>
+        <p class="download-status detail-status-line">${escapeHtml(downloadStatusLine(item))}</p>
+        <div class="progress detail-progress" aria-label="Overall progress">
+          <span style="width: ${normalisePercent(overall.percent)}%"></span>
+        </div>
         <dl>
           <div><dt>Phase</dt><dd>${escapeHtml(progress.phase || item.status)}</dd></div>
+          <div><dt>Overall</dt><dd>${formatProgressAmount(overall)}</dd></div>
+          <div><dt>Percent</dt><dd>${formatPercent(overall.percent)}</dd></div>
+          <div><dt>Speed</dt><dd>${formatSpeed(overall.bytes_per_second)}</dd></div>
+          <div><dt>ETA</dt><dd>${formatDuration(overall.eta_seconds)}</dd></div>
           <div><dt>Current file</dt><dd>${current ? escapeHtml(current.path || current.name || current.digest || "active file") : "None"}</dd></div>
           <div><dt>File progress</dt><dd>${current ? `${formatBytes(current.downloaded)} / ${formatBytes(current.total)}` : "None"}</dd></div>
-          <div><dt>ETA</dt><dd>${formatDuration((progress.overall || {}).eta_seconds)}</dd></div>
+          <div><dt>Last update</dt><dd>${formatTimestamp(item.updated_at)}</dd></div>
         </dl>
         ${item.error ? `<p class="error-text">${escapeHtml(item.error)}</p>` : ""}
         <ol class="message-list">
@@ -461,6 +483,60 @@
     return value.split(",").map((part) => part.trim()).filter(Boolean);
   }
 
+  function queueRunState(snapshot) {
+    if (snapshot.stop_after_file_requested) {
+      return "stopping after current file or snapshot";
+    }
+    if (snapshot.pause_requested) {
+      return snapshot.running ? "pausing after current download" : "paused";
+    }
+    return snapshot.running ? "running" : "idle";
+  }
+
+  function downloadStatusLine(item) {
+    const progress = item.progress || {};
+    const overall = progress.overall || {};
+    const current = progress.current_file || {};
+    const phase = progress.phase || item.status || "waiting";
+    const subject = current.path || current.name || current.digest || "snapshot";
+    const parts = [`${titleCase(phase)} ${subject}`];
+    const percent = formatPercent(overall.percent);
+    if (percent !== "calculating") {
+      parts.push(percent);
+    }
+    parts.push(formatProgressAmount(overall));
+    const speed = formatSpeed(overall.bytes_per_second);
+    if (speed !== "no speed") {
+      parts.push(speed);
+    }
+    const eta = formatDuration(overall.eta_seconds);
+    if (eta !== "unknown") {
+      parts.push(`ETA ${eta}`);
+    }
+    return parts.join(" | ");
+  }
+
+  function titleCase(value) {
+    const text = String(value || "").replace(/[-_]/g, " ");
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+  }
+
+  function isInstalledSnapshot(installed, cached, repoId, revision, repoType) {
+    const expectedRevision = revision || "main";
+    const expectedRepoType = repoType || "model";
+    const managedMatch = (installed || []).some((item) => (
+      item.repo_id === repoId
+      && (item.revision || "main") === expectedRevision
+      && (item.repo_type || "model") === expectedRepoType
+    ));
+    const cacheMatch = (cached || []).some((item) => (
+      item.repo_id === repoId
+      && (item.revision || expectedRevision) === expectedRevision
+      && (item.repo_type || "model") === expectedRepoType
+    ));
+    return managedMatch || cacheMatch;
+  }
+
   function repoPath(repoId) {
     return repoId.split("/").map(encodeURIComponent).join("/");
   }
@@ -501,6 +577,25 @@
     return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${units[index]}`;
   }
 
+  function formatProgressAmount(overall) {
+    const downloaded = overall && overall.downloaded;
+    const total = overall && overall.total;
+    if (downloaded === null || downloaded === undefined || Number.isNaN(Number(downloaded))) {
+      return total ? `0 B / ${formatBytes(total)}` : "waiting for bytes";
+    }
+    if (total === null || total === undefined || Number.isNaN(Number(total))) {
+      return `Downloaded ${formatBytes(downloaded)} | total calculating...`;
+    }
+    return `${formatBytes(downloaded)} / ${formatBytes(total)}`;
+  }
+
+  function formatPercent(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return "calculating";
+    }
+    return `${normalisePercent(value).toFixed(1)}%`;
+  }
+
   function formatSpeed(value) {
     if (!value) {
       return "no speed";
@@ -519,6 +614,13 @@
     const minutes = Math.floor(value / 60);
     const remainder = Math.round(value % 60);
     return `${minutes}m ${remainder}s`;
+  }
+
+  function formatTimestamp(value) {
+    if (!value) {
+      return "unknown";
+    }
+    return new Date(Number(value) * 1000).toLocaleTimeString();
   }
 
   function formatCount(value, label) {
@@ -553,5 +655,5 @@
     return escapeHtml(value);
   }
 
-  window.HuggingFacePull = { api, refresh, render };
+  window.HuggingFacePull = { api, refresh, render, isInstalledSnapshot, downloadStatusLine };
 }());

@@ -8,12 +8,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub.constants import HF_HUB_CACHE
+from huggingface_hub.utils import tqdm as hf_tqdm
 
 from .config import DEFAULT_ENDPOINT, safe_repo_dir_name
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 StopAfterFileCallback = Callable[[], bool]
+PROGRESS_EMIT_INTERVAL_SECONDS = 0.5
 
 
 class DownloadStoppedAfterFile(Exception):
@@ -131,6 +134,77 @@ def installed_models(library_dir: Path) -> list[dict[str, Any]]:
     )
 
 
+def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any]]:
+    root = Path(cache_dir or HF_HUB_CACHE)
+    cached: list[dict[str, Any]] = []
+    if not root.exists():
+        return cached
+
+    for repo_dir in sorted(root.glob("models--*")):
+        if not repo_dir.is_dir():
+            continue
+        repo_id = _repo_id_from_cache_dir(repo_dir.name, "models")
+        if repo_id is None:
+            continue
+        snapshots = repo_dir / "snapshots"
+        if not snapshots.is_dir():
+            continue
+        refs = _cache_refs(repo_dir)
+        if refs:
+            for revision, commit in refs.items():
+                snapshot = snapshots / commit
+                if snapshot.is_dir():
+                    cached.append(
+                        {
+                            "repo_id": repo_id,
+                            "revision": revision,
+                            "repo_type": "model",
+                            "snapshot_path": str(snapshot),
+                            "source": "huggingface_cache",
+                        }
+                    )
+            continue
+        for snapshot in sorted(snapshots.iterdir()):
+            if snapshot.is_dir():
+                cached.append(
+                    {
+                        "repo_id": repo_id,
+                        "revision": snapshot.name,
+                        "repo_type": "model",
+                        "snapshot_path": str(snapshot),
+                        "source": "huggingface_cache",
+                    }
+                )
+    return cached
+
+
+def _repo_id_from_cache_dir(name: str, prefix: str) -> str | None:
+    prefix_text = f"{prefix}--"
+    if not name.startswith(prefix_text):
+        return None
+    encoded = name[len(prefix_text):]
+    if "--" not in encoded:
+        return None
+    return encoded.replace("--", "/")
+
+
+def _cache_refs(repo_dir: Path) -> dict[str, str]:
+    refs_dir = repo_dir / "refs"
+    refs: dict[str, str] = {}
+    if not refs_dir.is_dir():
+        return refs
+    for ref in sorted(refs_dir.iterdir()):
+        if not ref.is_file():
+            continue
+        try:
+            commit = ref.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if commit:
+            refs[ref.name] = commit
+    return refs
+
+
 def remove_installed_model(library_dir: Path, ref: HubRef) -> None:
     library_root = Path(library_dir).resolve()
     marker = metadata_path(library_dir, ref)
@@ -221,6 +295,9 @@ def pull_snapshot(
             ignore_patterns=list(ref.ignore_patterns) or None,
             endpoint=endpoint,
             token=token,
+            tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
+            if progress is not None
+            else None,
         )
     )
     marker = metadata_path(library_dir, ref)
@@ -245,6 +322,93 @@ def pull_snapshot(
     if stop_after_file is not None and stop_after_file():
         raise DownloadStoppedAfterFile
     return snapshot_path
+
+
+def _progress_tqdm_class(
+    repo_id: str,
+    progress: ProgressCallback,
+    stop_after_file: StopAfterFileCallback | None = None,
+) -> type[hf_tqdm]:
+    class ProgressTqdm(hf_tqdm):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._hfp_ready = False
+            self._hfp_last_emit_at: float | None = None
+            self._hfp_last_signature: tuple[int | float | None, int | float | None] | None = None
+            super().__init__(*args, **kwargs)
+            self._hfp_ready = True
+            self._emit_download_progress(force=True)
+
+        def update(self, n: int | float | None = 1) -> Any:
+            result = super().update(n)
+            self._emit_download_progress()
+            self._raise_if_stop_requested()
+            return result
+
+        def refresh(self, *args: Any, **kwargs: Any) -> Any:
+            result = super().refresh(*args, **kwargs)
+            if getattr(self, "_hfp_ready", False):
+                self._emit_download_progress(force=True)
+                self._raise_if_stop_requested()
+            return result
+
+        def close(self) -> None:
+            if getattr(self, "_hfp_ready", False):
+                self._emit_download_progress(force=True)
+            super().close()
+
+        def _raise_if_stop_requested(self) -> None:
+            if stop_after_file is not None and stop_after_file():
+                raise DownloadStoppedAfterFile
+
+        def _emit_download_progress(self, *, force: bool = False) -> None:
+            if getattr(self, "unit", None) != "B":
+                return
+            downloaded = _numeric_progress_value(getattr(self, "n", None))
+            total = _numeric_progress_value(getattr(self, "total", None))
+            if downloaded is None and total is None:
+                return
+            signature = (downloaded, total)
+            if signature == getattr(self, "_hfp_last_signature", None):
+                return
+            now = time.monotonic()
+            last_emit_at = getattr(self, "_hfp_last_emit_at", None)
+            if (
+                not force
+                and last_emit_at is not None
+                and now - last_emit_at < PROGRESS_EMIT_INTERVAL_SECONDS
+            ):
+                return
+            rate = self.format_dict.get("rate")
+            speed = float(rate) if isinstance(rate, (int, float)) and rate > 0 else None
+            eta = None
+            if speed and total is not None and downloaded is not None:
+                eta = int(max(total - downloaded, 0) / speed)
+            percent = (
+                downloaded / total * 100
+                if downloaded is not None and total is not None and total > 0
+                else None
+            )
+            progress(
+                {
+                    "type": "download-progress",
+                    "repo_id": repo_id,
+                    "downloaded": downloaded,
+                    "total": total,
+                    "percent": percent,
+                    "bytes_per_second": speed,
+                    "eta_seconds": eta,
+                }
+            )
+            self._hfp_last_emit_at = now
+            self._hfp_last_signature = signature
+
+    return ProgressTqdm
+
+
+def _numeric_progress_value(value: Any) -> int | float | None:
+    if isinstance(value, (int, float)):
+        return value
+    return None
 
 
 def directory_size(path: Path) -> int:
