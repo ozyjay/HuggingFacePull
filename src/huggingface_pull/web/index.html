@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HuggingFacePull</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>HuggingFacePull</h1>
+        <p id="runtimeSummary">Loading local state...</p>
+      </div>
+      <div class="queue-controls" aria-label="Queue controls">
+        <button type="button" id="startQueue">Start</button>
+        <button type="button" id="pauseQueue">Pause</button>
+        <button type="button" id="stopAfterFile">Stop after file or snapshot</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="workspace" aria-label="Repository tools">
+        <div class="tool-grid">
+          <section class="panel" aria-labelledby="searchTitle">
+            <div class="panel-heading">
+              <h2 id="searchTitle">Search Hub repos</h2>
+              <span id="searchStatus" class="muted"></span>
+            </div>
+            <form id="searchForm" class="inline-form">
+              <label for="searchInput">Search text</label>
+              <div class="input-row">
+                <input id="searchInput" type="search" autocomplete="off" placeholder="qwen embedding">
+                <button type="submit">Search</button>
+              </div>
+            </form>
+            <div id="searchResults" class="result-list" aria-live="polite"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="addTitle">
+            <div class="panel-heading">
+              <h2 id="addTitle">Add HF repo ID</h2>
+              <span class="muted">Queued snapshots use your library directory.</span>
+            </div>
+            <form id="addForm" class="stack-form">
+              <label for="repoIdInput">HF repo ID</label>
+              <input id="repoIdInput" name="repo_id" required autocomplete="off" placeholder="Qwen/Qwen3-Embedding-0.6B">
+
+              <div class="form-pair">
+                <div>
+                  <label for="revisionInput">Revision</label>
+                  <input id="revisionInput" name="revision" value="main" autocomplete="off">
+                </div>
+                <div>
+                  <label for="repoTypeInput">Repo type</label>
+                  <select id="repoTypeInput" name="repo_type">
+                    <option value="model">model</option>
+                    <option value="dataset">dataset</option>
+                    <option value="space">space</option>
+                  </select>
+                </div>
+              </div>
+
+              <label for="allowPatternsInput">Allow patterns</label>
+              <input id="allowPatternsInput" name="allow_patterns" autocomplete="off" placeholder="*.safetensors, *.json">
+
+              <label for="ignorePatternsInput">Ignore patterns</label>
+              <input id="ignorePatternsInput" name="ignore_patterns" autocomplete="off" placeholder="*.msgpack, *.h5">
+
+              <div class="button-row">
+                <button type="submit">Add to queue</button>
+                <button type="button" id="inspectFiles" class="secondary">Inspect files</button>
+              </div>
+            </form>
+            <div id="fileResults" class="file-list" aria-live="polite"></div>
+          </section>
+        </div>
+
+        <section class="panel" aria-labelledby="queueTitle">
+          <div class="panel-heading">
+            <h2 id="queueTitle">Queue</h2>
+            <span id="queueSummary" class="muted"></span>
+          </div>
+          <div id="queueRows" class="queue-list" aria-live="polite"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="installedTitle">
+          <div class="panel-heading">
+            <h2 id="installedTitle">Installed snapshots</h2>
+            <span id="installedSummary" class="muted"></span>
+          </div>
+          <div id="installedList" class="installed-list" aria-live="polite"></div>
+        </section>
+      </section>
+
+      <aside class="side-rail" aria-label="Details and maintenance">
+        <section class="panel detail-panel" aria-labelledby="detailTitle">
+          <div class="panel-heading">
+            <h2 id="detailTitle">Detail</h2>
+            <span id="detailStatus" class="muted"></span>
+          </div>
+          <div id="detailPanel"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="cleanupTitle">
+          <div class="panel-heading">
+            <h2 id="cleanupTitle">Cleanup</h2>
+            <span class="muted">Conservative stale file scan.</span>
+          </div>
+          <form id="cleanupForm" class="stack-form">
+            <label class="check-row">
+              <input id="includePartialsInput" type="checkbox">
+              Include partial files
+            </label>
+            <label for="olderThanInput">Older than days</label>
+            <input id="olderThanInput" type="number" min="0" step="1" value="7">
+            <div class="button-row">
+              <button type="button" id="scanCleanup">Scan</button>
+              <button type="button" id="deleteCleanup" class="danger">Delete scan matches</button>
+            </div>
+          </form>
+          <div id="cleanupResult" class="cleanup-result" aria-live="polite"></div>
+        </section>
+
+        <div id="notice" class="notice" role="status" aria-live="polite"></div>
+      </aside>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

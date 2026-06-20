@@ -39,6 +39,15 @@ def test_state_endpoint_returns_snapshot(tmp_path):
     assert response.json()["library_dir"] == str(tmp_path)
 
 
+def test_static_index_served(tmp_path):
+    client = TestClient(create_app(library_dir=tmp_path))
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "HuggingFacePull" in response.text
+
+
 def test_queue_endpoint_queues_repo(tmp_path):
     client = TestClient(create_app(library_dir=tmp_path))
 
