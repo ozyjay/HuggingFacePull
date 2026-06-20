@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import itertools
+import multiprocessing
+import queue as queue_lib
 import threading
 import time
 from pathlib import Path
@@ -15,6 +17,11 @@ from .hub import DownloadStoppedAfterFile, HubRef, canonical_ref, pull_snapshot
 PullFunc = Callable[..., Any]
 PROGRESS_LOG_INTERVAL_SECONDS = 30.0
 PROGRESS_LOG_PERCENT_STEP = 5.0
+PROCESS_EVENT_POLL_SECONDS = 0.1
+
+
+class DownloadForceStopped(Exception):
+    """Raised when the queue terminates a blocked download process."""
 
 
 def _empty_progress() -> dict[str, Any]:
@@ -33,11 +40,15 @@ class DownloadQueue:
         endpoint: str = DEFAULT_ENDPOINT,
         token: str | None = None,
         pull_func: PullFunc = pull_snapshot,
+        hard_stop_downloads: bool | None = None,
     ) -> None:
         self.library_dir = Path(library_dir)
         self.endpoint = endpoint
         self.token = token
         self.pull_func = pull_func
+        self.hard_stop_downloads = (
+            pull_func is pull_snapshot if hard_stop_downloads is None else hard_stop_downloads
+        )
         self._items: list[dict[str, Any]] = []
         self._ids = itertools.count(1)
         self._condition = threading.Condition()
@@ -224,18 +235,8 @@ class DownloadQueue:
                     self._condition.notify_all()
 
                 try:
-                    self.pull_func(
-                        item["_ref"],
-                        library_dir=self.library_dir,
-                        endpoint=self.endpoint,
-                        token=self.token,
-                        dry_run=False,
-                        progress=lambda event, item_id=item["id"]: self._record_progress(
-                            item_id, event
-                        ),
-                        stop_after_file=self._stop_after_file_requested_locked,
-                    )
-                except DownloadStoppedAfterFile:
+                    self._pull_item(item)
+                except (DownloadStoppedAfterFile, DownloadForceStopped):
                     with self._condition:
                         if item["progress"]["phase"] == "completed":
                             item["status"] = "completed"
@@ -243,7 +244,12 @@ class DownloadQueue:
                             item["status"] = "stopped"
                             item["progress"]["phase"] = "stopped"
                             self._append_message_locked(item, "stopped after current snapshot")
-                            self._log_item("download stopped after current file", item)
+                            self._log_item(
+                                "download force stopped"
+                                if self.hard_stop_downloads
+                                else "download stopped after current file",
+                                item,
+                            )
                         self._stop_after_file_requested = False
                         item["updated_at"] = time.time()
                         self._condition.notify_all()
@@ -268,6 +274,30 @@ class DownloadQueue:
                 self._clear_worker_locked()
                 self._log("worker exited", library_dir=self.library_dir)
                 self._condition.notify_all()
+
+    def _pull_item(self, item: dict[str, Any]) -> None:
+        progress = lambda event, item_id=item["id"]: self._record_progress(item_id, event)
+        if not self.hard_stop_downloads:
+            self.pull_func(
+                item["_ref"],
+                library_dir=self.library_dir,
+                endpoint=self.endpoint,
+                token=self.token,
+                dry_run=False,
+                progress=progress,
+                stop_after_file=self._stop_after_file_requested_locked,
+            )
+            return
+
+        _run_pull_in_process(
+            self.pull_func,
+            item["_ref"],
+            library_dir=self.library_dir,
+            endpoint=self.endpoint,
+            token=self.token,
+            progress=progress,
+            stop_after_file=self._stop_after_file_requested_locked,
+        )
 
     def _record_progress(self, item_id: str, event: dict[str, Any]) -> None:
         with self._condition:
@@ -568,3 +598,87 @@ class DownloadQueue:
             write_log(message, **fields)
         except Exception:
             pass
+
+
+def _run_pull_in_process(
+    pull_func: PullFunc,
+    ref: HubRef,
+    *,
+    library_dir: Path,
+    endpoint: str,
+    token: str | None,
+    progress: Callable[[dict[str, Any]], None],
+    stop_after_file: Callable[[], bool],
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    events = context.Queue()
+    process = context.Process(
+        target=_download_process_entry,
+        args=(pull_func, ref, Path(library_dir), endpoint, token, events),
+        daemon=True,
+    )
+    process.start()
+    try:
+        while True:
+            if stop_after_file():
+                _terminate_process(process)
+                raise DownloadForceStopped
+            try:
+                kind, payload = events.get(timeout=PROCESS_EVENT_POLL_SECONDS)
+            except queue_lib.Empty:
+                if not process.is_alive():
+                    process.join(timeout=0)
+                    if process.exitcode == 0:
+                        return
+                    raise RuntimeError(f"download process exited with code {process.exitcode}")
+                continue
+
+            if kind == "progress":
+                progress(payload)
+                continue
+            if kind == "done":
+                process.join(timeout=1)
+                return
+            if kind == "stopped":
+                process.join(timeout=1)
+                raise DownloadStoppedAfterFile
+            if kind == "error":
+                process.join(timeout=1)
+                raise RuntimeError(str(payload))
+    finally:
+        if process.is_alive():
+            _terminate_process(process)
+
+
+def _download_process_entry(
+    pull_func: PullFunc,
+    ref: HubRef,
+    library_dir: Path,
+    endpoint: str,
+    token: str | None,
+    events: Any,
+) -> None:
+    try:
+        pull_func(
+            ref,
+            library_dir=library_dir,
+            endpoint=endpoint,
+            token=token,
+            dry_run=False,
+            progress=lambda event: events.put(("progress", event)),
+            stop_after_file=lambda: False,
+        )
+    except DownloadStoppedAfterFile:
+        events.put(("stopped", None))
+    except Exception as error:
+        events.put(("error", str(error)))
+    else:
+        events.put(("done", None))
+
+
+def _terminate_process(process: multiprocessing.Process) -> None:
+    process.terminate()
+    process.join(timeout=2)
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=2)

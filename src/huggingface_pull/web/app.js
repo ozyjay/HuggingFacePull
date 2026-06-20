@@ -128,6 +128,7 @@
     els.detailStatus.textContent = selected ? selected.status : "";
     els.notice.textContent = state.notice;
     els.notice.classList.toggle("error", state.notice.startsWith("Error:"));
+    renderQueueControls(snapshot);
 
     renderSearchResults();
     renderFileResults();
@@ -508,6 +509,24 @@
     return snapshot.running ? "running" : "idle";
   }
 
+  function queueControlState(snapshot) {
+    const running = Boolean(snapshot && snapshot.running);
+    const stopping = Boolean(snapshot && snapshot.stop_after_file_requested);
+    const pausing = Boolean(snapshot && snapshot.pause_requested);
+    return {
+      startDisabled: running || stopping,
+      pauseDisabled: !running || pausing || stopping,
+      stopDisabled: !running || stopping,
+    };
+  }
+
+  function renderQueueControls(snapshot) {
+    const controls = queueControlState(snapshot);
+    els.startQueue.disabled = controls.startDisabled;
+    els.pauseQueue.disabled = controls.pauseDisabled;
+    els.stopAfterFile.disabled = controls.stopDisabled;
+  }
+
   function downloadStatusLine(item) {
     const progress = item.progress || {};
     const overall = progress.overall || {};
@@ -677,6 +696,7 @@
     isInstalledSnapshot,
     downloadStatusLine,
     cleanupSummaryLine,
+    queueControlState,
     queueRunState,
   };
 }());

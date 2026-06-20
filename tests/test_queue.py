@@ -18,6 +18,19 @@ def wait_for(predicate, timeout=2):
     return predicate()
 
 
+def blocked_process_pull(ref, **kwargs):
+    kwargs["progress"](
+        {
+            "type": "download-progress",
+            "repo_id": ref.repo_id,
+            "downloaded": 11 * 1024 * 1024,
+            "total": 3 * 1024 * 1024 * 1024,
+            "percent": 0.36,
+        }
+    )
+    time.sleep(30)
+
+
 def test_add_creates_waiting_item(tmp_path):
     queue = DownloadQueue(library_dir=tmp_path, pull_func=lambda *args, **kwargs: None)
 
@@ -258,6 +271,29 @@ def test_stop_after_file_during_progress_marks_item_stopped(tmp_path):
     assert item["progress"]["phase"] == "stopped"
     assert snapshot["stop_after_file_requested"] is False
     assert snapshot["pause_requested"] is False
+
+
+def test_hard_stop_interrupts_blocked_process_download(tmp_path):
+    queue = DownloadQueue(
+        library_dir=tmp_path,
+        pull_func=blocked_process_pull,
+        hard_stop_downloads=True,
+    )
+    queue.add({"repo_id": "Qwen/Qwen2.5-1.5B-Instruct"})
+    queue.start()
+
+    assert wait_for(lambda: queue.snapshot()["items"][0]["progress"]["phase"] == "downloading")
+    queue.stop_after_current_file()
+
+    assert queue.wait_until_idle(3)
+    snapshot = queue.snapshot()
+    [item] = snapshot["items"]
+    assert item["status"] == "stopped"
+    assert item["progress"]["phase"] == "stopped"
+    assert item["messages"][-1]["text"] == "stopped after current snapshot"
+    assert snapshot["running"] is False
+    assert snapshot["pause_requested"] is False
+    assert snapshot["stop_after_file_requested"] is False
 
 
 def test_stop_after_file_keeps_model_complete_item_completed_for_current_hub_semantics(

@@ -217,6 +217,30 @@ def test_queue_run_state_distinguishes_pause_and_idle_states():
           }),
           "Stopped model.safetensors | 10.0% | 10 B / 100 B",
         );
+        assert.equal(
+          JSON.stringify(context.window.HuggingFacePull.queueControlState({
+            running: true,
+            pause_requested: false,
+            stop_after_file_requested: false,
+          })),
+          JSON.stringify({ startDisabled: true, pauseDisabled: false, stopDisabled: false }),
+        );
+        assert.equal(
+          JSON.stringify(context.window.HuggingFacePull.queueControlState({
+            running: true,
+            pause_requested: true,
+            stop_after_file_requested: true,
+          })),
+          JSON.stringify({ startDisabled: true, pauseDisabled: true, stopDisabled: true }),
+        );
+        assert.equal(
+          JSON.stringify(context.window.HuggingFacePull.queueControlState({
+            running: false,
+            pause_requested: false,
+            stop_after_file_requested: false,
+          })),
+          JSON.stringify({ startDisabled: false, pauseDisabled: true, stopDisabled: true }),
+        );
         """
     )
 
