@@ -192,7 +192,7 @@ def test_worker_runs_one_item_at_a_time(tmp_path):
     assert second["status"] == "waiting"
 
 
-def test_stop_after_file_returns_running_item_to_waiting_for_pre_complete_cooperative_stop(
+def test_stop_after_file_marks_running_item_stopped_for_pre_complete_cooperative_stop(
     tmp_path,
 ):
     stop_seen = threading.Event()
@@ -217,12 +217,13 @@ def test_stop_after_file_returns_running_item_to_waiting_for_pre_complete_cooper
     assert queue.wait_until_idle(2)
     [stopped_item] = queue.snapshot()["items"]
     assert stopped_item["id"] == item["id"]
-    assert stopped_item["status"] == "waiting"
-    assert stopped_item["progress"]["phase"] == "waiting"
+    assert stopped_item["status"] == "stopped"
+    assert stopped_item["progress"]["phase"] == "stopped"
     assert stopped_item["messages"][-1]["text"] == "stopped after current snapshot"
+    assert queue.snapshot()["pause_requested"] is False
 
 
-def test_stop_after_file_during_progress_returns_item_to_waiting(tmp_path):
+def test_stop_after_file_during_progress_marks_item_stopped(tmp_path):
     release_progress = threading.Event()
     stop_observed = threading.Event()
 
@@ -253,9 +254,10 @@ def test_stop_after_file_during_progress_returns_item_to_waiting(tmp_path):
     assert stop_observed.is_set()
     snapshot = queue.snapshot()
     [item] = snapshot["items"]
-    assert item["status"] == "waiting"
-    assert item["progress"]["phase"] == "waiting"
+    assert item["status"] == "stopped"
+    assert item["progress"]["phase"] == "stopped"
     assert snapshot["stop_after_file_requested"] is False
+    assert snapshot["pause_requested"] is False
 
 
 def test_stop_after_file_keeps_model_complete_item_completed_for_current_hub_semantics(
@@ -406,6 +408,27 @@ def test_pause_after_current_pauses_before_next_waiting_item(tmp_path):
     assert entered == ["first/model"]
     assert [item["status"] for item in snapshot["items"]] == ["completed", "waiting"]
     assert snapshot["pause_requested"] is True
+
+
+def test_pause_after_current_resets_to_idle_when_no_waiting_items_remain(tmp_path):
+    release_download = threading.Event()
+
+    def fake_pull(ref, **kwargs):
+        release_download.wait(2)
+
+    queue = DownloadQueue(library_dir=tmp_path, pull_func=fake_pull)
+    queue.add({"repo_id": "Qwen/Qwen3"})
+    queue.start()
+
+    assert wait_for(lambda: queue.snapshot()["items"][0]["status"] == "running")
+    queue.pause_after_current()
+    release_download.set()
+
+    assert queue.wait_until_idle(2)
+    snapshot = queue.snapshot()
+    assert snapshot["items"][0]["status"] == "completed"
+    assert snapshot["running"] is False
+    assert snapshot["pause_requested"] is False
 
 
 def test_progress_tracks_manifest_model_plan_file_progress_and_model_complete(tmp_path):

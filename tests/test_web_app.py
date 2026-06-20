@@ -127,3 +127,97 @@ def test_download_status_helpers_show_running_and_unknown_total_details():
     )
 
     subprocess.run(["node", "-e", script], check=True)
+
+
+def test_cleanup_summary_mentions_incomplete_snapshots():
+    script = textwrap.dedent(
+        """
+        const assert = require("node:assert/strict");
+        const fs = require("node:fs");
+        const vm = require("node:vm");
+
+        const context = {
+          window: {},
+          document: {
+            addEventListener() {},
+            getElementById() { return null; },
+          },
+          setInterval() {},
+          fetch() {},
+        };
+        vm.createContext(context);
+        vm.runInContext(fs.readFileSync("src/huggingface_pull/web/app.js", "utf8"), context);
+
+        assert.equal(
+          context.window.HuggingFacePull.cleanupSummaryLine({
+            dry_run: true,
+            stale_partials: [{ path: "one" }],
+            incomplete_snapshots: [{ path: "snapshot" }, { path: "other" }],
+          }),
+          "Scan found 1 stale file and 2 incomplete snapshots.",
+        );
+
+        assert.equal(
+          context.window.HuggingFacePull.cleanupSummaryLine({
+            dry_run: false,
+            stale_partials: [],
+            incomplete_snapshots: [{ path: "snapshot" }],
+          }),
+          "Deleted 0 stale files and 1 incomplete snapshot.",
+        );
+        """
+    )
+
+    subprocess.run(["node", "-e", script], check=True)
+
+
+def test_queue_run_state_distinguishes_pause_and_idle_states():
+    script = textwrap.dedent(
+        """
+        const assert = require("node:assert/strict");
+        const fs = require("node:fs");
+        const vm = require("node:vm");
+
+        const context = {
+          window: {},
+          document: {
+            addEventListener() {},
+            getElementById() { return null; },
+          },
+          setInterval() {},
+          fetch() {},
+        };
+        vm.createContext(context);
+        vm.runInContext(fs.readFileSync("src/huggingface_pull/web/app.js", "utf8"), context);
+
+        assert.equal(
+          context.window.HuggingFacePull.queueRunState({
+            running: false,
+            pause_requested: false,
+            stop_after_file_requested: false,
+          }),
+          "idle",
+        );
+        assert.equal(
+          context.window.HuggingFacePull.queueRunState({
+            running: false,
+            pause_requested: true,
+            stop_after_file_requested: false,
+          }),
+          "paused",
+        );
+        assert.equal(
+          context.window.HuggingFacePull.downloadStatusLine({
+            status: "stopped",
+            progress: {
+              phase: "stopped",
+              overall: { downloaded: 10, total: 100, percent: 10 },
+              current_file: { path: "model.safetensors" },
+            },
+          }),
+          "Stopped model.safetensors | 10.0% | 10 B / 100 B",
+        );
+        """
+    )
+
+    subprocess.run(["node", "-e", script], check=True)

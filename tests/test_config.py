@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,14 @@ def test_default_log_file_expands_user_from_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("HUGGINGFACE_PULL_LOG_FILE", "~/hf.log")
 
     assert default_log_file() == tmp_path / "hf.log"
+
+
+def test_test_suite_redirects_default_log_file_away_from_user_logs():
+    configured = os.environ.get("HUGGINGFACE_PULL_LOG_FILE", "")
+
+    assert configured
+    assert "/Library/Logs/HuggingFacePull/app.log" not in configured
+    assert default_log_file().name == "app.log"
 
 
 def test_safe_repo_dir_name_preserves_repo_identity_without_slashes():

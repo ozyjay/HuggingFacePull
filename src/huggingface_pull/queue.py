@@ -240,8 +240,8 @@ class DownloadQueue:
                         if item["progress"]["phase"] == "completed":
                             item["status"] = "completed"
                         else:
-                            item["status"] = "waiting"
-                            item["progress"]["phase"] = "waiting"
+                            item["status"] = "stopped"
+                            item["progress"]["phase"] = "stopped"
                             self._append_message_locked(item, "stopped after current snapshot")
                             self._log_item("download stopped after current file", item)
                         self._stop_after_file_requested = False
@@ -487,6 +487,9 @@ class DownloadQueue:
                 return item
         return None
 
+    def _has_waiting_item_locked(self) -> bool:
+        return any(item["status"] == "waiting" for item in self._items)
+
     def _find_item(self, item_id: str) -> dict[str, Any]:
         for item in self._items:
             if item["id"] == item_id:
@@ -502,6 +505,8 @@ class DownloadQueue:
             self._worker = None
         if not any(item["status"] == "running" for item in self._items):
             self._stop_after_file_requested = False
+        if self._pause_requested and not self._has_waiting_item_locked():
+            self._pause_requested = False
         self._condition.notify_all()
 
     def _copy_item(self, item: dict[str, Any]) -> dict[str, Any]:

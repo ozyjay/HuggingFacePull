@@ -316,6 +316,44 @@ def _collect_stale_partials(root: Path, source: str, cutoff: float) -> list[dict
     return stale_partials
 
 
+def _is_download_metadata_file(path: Path) -> bool:
+    return path.name.endswith(".metadata") or path.name.endswith(".lock")
+
+
+def _collect_incomplete_library_snapshots(library_dir: Path) -> list[dict[str, Any]]:
+    root = Path(library_dir)
+    if not root.exists():
+        return []
+
+    incomplete: list[dict[str, Any]] = []
+    for repo_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        for revision_dir in sorted(path for path in repo_dir.iterdir() if path.is_dir()):
+            if (revision_dir / ".huggingfacepull.json").exists():
+                continue
+            download_dir = revision_dir / ".cache" / "huggingface" / "download"
+            if not download_dir.is_dir():
+                continue
+            evidence = [
+                str(path)
+                for path in sorted(download_dir.rglob("*"))
+                if path.is_file() and (_is_download_metadata_file(path) or _is_partial_file(path))
+            ]
+            if not evidence:
+                continue
+            incomplete.append(
+                {
+                    "path": str(revision_dir),
+                    "repo_dir": repo_dir.name,
+                    "revision": revision_dir.name,
+                    "size": directory_size(revision_dir),
+                    "reason": "missing_metadata_marker",
+                    "evidence": evidence,
+                    "source": "library",
+                }
+            )
+    return incomplete
+
+
 def _log(message: str, /, **fields: Any) -> None:
     try:
         write_log(message, **fields)
@@ -330,6 +368,7 @@ def cleanup_library(
     older_than_days: int = 7,
 ) -> dict[str, Any]:
     stale_partials: list[dict[str, Any]] = []
+    incomplete_snapshots: list[dict[str, Any]] = []
     cutoff = time.time() - older_than_days * 24 * 60 * 60
 
     if include_partials:
@@ -341,6 +380,7 @@ def cleanup_library(
                     continue
                 seen_paths.add(resolved_path)
                 stale_partials.append(item)
+        incomplete_snapshots = _collect_incomplete_library_snapshots(library_dir)
 
     _log(
         "cleanup scanned",
@@ -348,10 +388,12 @@ def cleanup_library(
         include_partials=include_partials,
         older_than_days=older_than_days,
         stale_partial_count=len(stale_partials),
+        incomplete_snapshot_count=len(incomplete_snapshots),
         delete=delete,
     )
 
     deleted: list[str] = []
+    deleted_snapshots: list[str] = []
     if delete:
         for item in stale_partials:
             path = Path(item["path"])
@@ -361,12 +403,33 @@ def cleanup_library(
                 continue
             deleted.append(str(path))
             _log("cleanup partial deleted", path=path, source=item["source"])
+        library_root = Path(library_dir).resolve()
+        for item in incomplete_snapshots:
+            path = Path(item["path"])
+            try:
+                path.resolve().relative_to(library_root)
+            except ValueError:
+                continue
+            try:
+                shutil.rmtree(path)
+            except FileNotFoundError:
+                continue
+            deleted_snapshots.append(str(path))
+            _log(
+                "cleanup incomplete snapshot deleted",
+                path=path,
+                source=item["source"],
+                reason=item["reason"],
+            )
 
     return {
         "dry_run": not delete,
         "stale_partial_count": len(stale_partials),
         "stale_partials": stale_partials,
+        "incomplete_snapshot_count": len(incomplete_snapshots),
+        "incomplete_snapshots": incomplete_snapshots,
         "deleted": deleted,
+        "deleted_snapshots": deleted_snapshots,
     }
 
 

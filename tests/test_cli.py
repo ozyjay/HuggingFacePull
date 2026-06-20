@@ -71,6 +71,25 @@ def test_gc_calls_cleanup(monkeypatch, tmp_path):
     assert calls == [(tmp_path, False)]
 
 
+def test_gc_reports_incomplete_snapshot_counts(monkeypatch, tmp_path, capsys):
+    def fake_cleanup_library(library_dir, **kwargs):
+        return {
+            "stale_partial_count": 1,
+            "incomplete_snapshot_count": 2,
+            "deleted": ["partial"],
+            "deleted_snapshots": ["first", "second"],
+        }
+
+    monkeypatch.setattr(cli, "cleanup_library", fake_cleanup_library)
+
+    assert cli.main(["gc", "--delete", "--include-partials", "--library-dir", str(tmp_path)]) == 0
+
+    assert (
+        capsys.readouterr().out.strip()
+        == "Stale partials: 1; deleted: 1; incomplete snapshots: 2; snapshots deleted: 2"
+    )
+
+
 def test_main_reports_hub_ref_errors(monkeypatch, capsys):
     def bad_hub_ref(**kwargs):
         raise RuntimeError("bad ref")

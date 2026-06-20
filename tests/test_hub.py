@@ -748,6 +748,7 @@ def test_cleanup_library_includes_huggingface_cache_partials(monkeypatch, tmp_pa
                 "include_partials": True,
                 "older_than_days": 0,
                 "stale_partial_count": 2,
+                "incomplete_snapshot_count": 0,
                 "delete": False,
             },
         ),
@@ -758,12 +759,105 @@ def test_cleanup_library_includes_huggingface_cache_partials(monkeypatch, tmp_pa
                 "include_partials": True,
                 "older_than_days": 0,
                 "stale_partial_count": 2,
+                "incomplete_snapshot_count": 0,
                 "delete": True,
             },
         ),
         ("cleanup partial deleted", {"path": library_partial, "source": "library"}),
         ("cleanup partial deleted", {"path": cache_partial, "source": "huggingface_cache"}),
     ]
+
+
+def test_cleanup_library_reports_and_deletes_incomplete_library_snapshots(
+    monkeypatch, tmp_path
+):
+    log_events = []
+    library_root = tmp_path / "library"
+    snapshot = library_root / "Qwen--Qwen2.5-1.5B-Instruct" / "main"
+    metadata_dir = snapshot / ".cache" / "huggingface" / "download"
+    metadata_dir.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (metadata_dir / "config.json.metadata").write_text("{}", encoding="utf-8")
+    (metadata_dir / "model.safetensors.lock").write_text("", encoding="utf-8")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
+
+    dry_run = hub.cleanup_library(library_root, include_partials=True, older_than_days=0)
+
+    assert dry_run["dry_run"] is True
+    assert dry_run["incomplete_snapshot_count"] == 1
+    assert dry_run["incomplete_snapshots"] == [
+        {
+            "path": str(snapshot),
+            "repo_dir": "Qwen--Qwen2.5-1.5B-Instruct",
+            "revision": "main",
+            "size": hub.directory_size(snapshot),
+            "reason": "missing_metadata_marker",
+            "evidence": [
+                str(metadata_dir / "config.json.metadata"),
+                str(metadata_dir / "model.safetensors.lock"),
+            ],
+            "source": "library",
+        }
+    ]
+    assert snapshot.exists()
+
+    deleted = hub.cleanup_library(library_root, delete=True, include_partials=True, older_than_days=0)
+
+    assert deleted["deleted_snapshots"] == [str(snapshot)]
+    assert not snapshot.exists()
+    assert log_events == [
+        (
+            "cleanup scanned",
+            {
+                "library_dir": library_root,
+                "include_partials": True,
+                "older_than_days": 0,
+                "stale_partial_count": 0,
+                "incomplete_snapshot_count": 1,
+                "delete": False,
+            },
+        ),
+        (
+            "cleanup scanned",
+            {
+                "library_dir": library_root,
+                "include_partials": True,
+                "older_than_days": 0,
+                "stale_partial_count": 0,
+                "incomplete_snapshot_count": 1,
+                "delete": True,
+            },
+        ),
+        (
+            "cleanup incomplete snapshot deleted",
+            {"path": snapshot, "source": "library", "reason": "missing_metadata_marker"},
+        ),
+    ]
+
+
+def test_cleanup_library_keeps_completed_snapshots_with_huggingface_metadata(
+    monkeypatch, tmp_path
+):
+    library_root = tmp_path / "library"
+    snapshot = library_root / "Qwen--Qwen2.5-1.5B-Instruct" / "main"
+    metadata_dir = snapshot / ".cache" / "huggingface" / "download"
+    metadata_dir.mkdir(parents=True)
+    (snapshot / ".huggingfacepull.json").write_text("{}", encoding="utf-8")
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (metadata_dir / "config.json.metadata").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
+
+    report = hub.cleanup_library(library_root, delete=True, include_partials=True, older_than_days=0)
+
+    assert report["incomplete_snapshot_count"] == 0
+    assert report["deleted_snapshots"] == []
+    assert snapshot.exists()
 
 
 def test_directory_size_sums_nested_files(tmp_path):

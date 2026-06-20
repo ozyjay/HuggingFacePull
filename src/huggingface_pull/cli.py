@@ -86,7 +86,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         stale_count = report.get("stale_partial_count", 0)
         deleted_count = len(report.get("deleted", []))
-        print(f"Stale partials: {stale_count}; deleted: {deleted_count}")
+        incomplete_count = report.get("incomplete_snapshot_count", 0)
+        deleted_snapshot_count = len(report.get("deleted_snapshots", []))
+        print(
+            f"Stale partials: {stale_count}; deleted: {deleted_count}; "
+            f"incomplete snapshots: {incomplete_count}; snapshots deleted: {deleted_snapshot_count}"
+        )
         return 0
 
     args = build_parser().parse_args(argv)

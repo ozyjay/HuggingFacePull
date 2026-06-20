@@ -453,16 +453,28 @@
       return;
     }
     const stale = result.stale_partials || [];
+    const incomplete = result.incomplete_snapshots || [];
     els.cleanupResult.innerHTML = `
-      <p>${result.dry_run ? "Scan found" : "Deleted"} ${stale.length} stale file${stale.length === 1 ? "" : "s"}.</p>
+      <p>${cleanupSummaryLine(result)}</p>
       ${result.deleted && result.deleted.length ? `<p>${result.deleted.length} deleted.</p>` : ""}
+      ${result.deleted_snapshots && result.deleted_snapshots.length ? `<p>${result.deleted_snapshots.length} snapshots deleted.</p>` : ""}
       <ul>
         ${stale.slice(0, 30).map((item) => {
           const source = item.source === "huggingface_cache" ? "HF cache" : item.source === "library" ? "Library" : "File";
           return `<li><span>${escapeHtml(item.name || item.path)}</span><small>${escapeHtml(source)} - ${formatBytes(item.size)}</small></li>`;
         }).join("")}
+        ${incomplete.slice(0, 30).map((item) => {
+          return `<li><span>${escapeHtml(item.path)}</span><small>Incomplete snapshot - ${formatBytes(item.size)}</small></li>`;
+        }).join("")}
       </ul>
     `;
+  }
+
+  function cleanupSummaryLine(result) {
+    const staleCount = (result.stale_partials || []).length;
+    const incompleteCount = (result.incomplete_snapshots || []).length;
+    const action = result.dry_run ? "Scan found" : "Deleted";
+    return `${action} ${staleCount} stale file${staleCount === 1 ? "" : "s"} and ${incompleteCount} incomplete snapshot${incompleteCount === 1 ? "" : "s"}.`;
   }
 
   function selectedItem(items) {
@@ -658,5 +670,13 @@
     return escapeHtml(value);
   }
 
-  window.HuggingFacePull = { api, refresh, render, isInstalledSnapshot, downloadStatusLine };
+  window.HuggingFacePull = {
+    api,
+    refresh,
+    render,
+    isInstalledSnapshot,
+    downloadStatusLine,
+    cleanupSummaryLine,
+    queueRunState,
+  };
 }());
