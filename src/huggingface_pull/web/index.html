@@ -105,15 +105,15 @@
         <section class="panel" aria-labelledby="cleanupTitle">
           <div class="panel-heading">
             <h2 id="cleanupTitle">Cleanup</h2>
-            <span class="muted">Conservative stale file scan.</span>
+            <span class="muted">Stale partial file scan.</span>
           </div>
           <form id="cleanupForm" class="stack-form">
             <label class="check-row">
-              <input id="includePartialsInput" type="checkbox">
-              Include partial files
+              <input id="includePartialsInput" type="checkbox" checked>
+              Include app and HF cache partial files
             </label>
             <label for="olderThanInput">Older than days</label>
-            <input id="olderThanInput" type="number" min="0" step="1" value="7">
+            <input id="olderThanInput" type="number" min="0" step="1" value="0">
             <div class="button-row">
               <button type="button" id="scanCleanup">Scan</button>
               <button type="button" id="deleteCleanup" class="danger">Delete scan matches</button>

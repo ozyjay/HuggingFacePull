@@ -457,7 +457,10 @@
       <p>${result.dry_run ? "Scan found" : "Deleted"} ${stale.length} stale file${stale.length === 1 ? "" : "s"}.</p>
       ${result.deleted && result.deleted.length ? `<p>${result.deleted.length} deleted.</p>` : ""}
       <ul>
-        ${stale.slice(0, 30).map((item) => `<li><span>${escapeHtml(item.name || item.path)}</span><small>${formatBytes(item.size)}</small></li>`).join("")}
+        ${stale.slice(0, 30).map((item) => {
+          const source = item.source === "huggingface_cache" ? "HF cache" : item.source === "library" ? "Library" : "File";
+          return `<li><span>${escapeHtml(item.name || item.path)}</span><small>${escapeHtml(source)} - ${formatBytes(item.size)}</small></li>`;
+        }).join("")}
       </ul>
     `;
   }
@@ -475,7 +478,7 @@
   function cleanupPayload() {
     return {
       include_partials: els.includePartialsInput.checked,
-      older_than_days: Number.parseInt(els.olderThanInput.value || "7", 10),
+      older_than_days: Number.parseInt(els.olderThanInput.value || "0", 10),
     };
   }
 

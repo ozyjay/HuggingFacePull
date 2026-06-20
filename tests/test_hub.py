@@ -566,10 +566,11 @@ def test_remove_installed_model_traversal_revision_cannot_delete_outside_library
     assert not marker.parent.exists()
 
 
-def test_cleanup_library_reports_and_deletes_stale_partials_only_when_enabled(tmp_path):
+def test_cleanup_library_reports_and_deletes_stale_partials_only_when_enabled(monkeypatch, tmp_path):
     old_partial = tmp_path / "Qwen--Qwen3" / "main" / "weights.bin.incomplete"
     recent_partial = tmp_path / "Qwen--Qwen3" / "main" / "tokenizer.tmp"
     normal_file = tmp_path / "Qwen--Qwen3" / "main" / "config.json"
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(tmp_path / "hf-cache"))
     old_partial.parent.mkdir(parents=True)
     old_partial.write_bytes(b"old")
     recent_partial.write_bytes(b"new")
@@ -593,6 +594,41 @@ def test_cleanup_library_reports_and_deletes_stale_partials_only_when_enabled(tm
     assert not old_partial.exists()
     assert recent_partial.exists()
     assert normal_file.exists()
+
+
+def test_cleanup_library_includes_huggingface_cache_partials(monkeypatch, tmp_path):
+    library_root = tmp_path / "library"
+    library_partial = library_root / "Qwen--Qwen3" / "main" / "weights.bin.incomplete"
+    cache_root = tmp_path / "hf-cache"
+    cache_partial = cache_root / "models--Qwen--Qwen3" / "blobs" / "abc.123.incomplete"
+    lock_file = cache_root / ".locks" / "models--Qwen--Qwen3" / "abc.lock"
+    library_partial.parent.mkdir(parents=True)
+    cache_partial.parent.mkdir(parents=True)
+    lock_file.parent.mkdir(parents=True)
+    library_partial.write_bytes(b"library")
+    cache_partial.write_bytes(b"cache")
+    lock_file.write_bytes(b"lock")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache_root))
+
+    dry_run = hub.cleanup_library(library_root, include_partials=True, older_than_days=0)
+
+    assert dry_run["stale_partial_count"] == 2
+    assert [item["path"] for item in dry_run["stale_partials"]] == [
+        str(library_partial),
+        str(cache_partial),
+    ]
+    assert [item["source"] for item in dry_run["stale_partials"]] == [
+        "library",
+        "huggingface_cache",
+    ]
+    assert str(lock_file) not in [item["path"] for item in dry_run["stale_partials"]]
+
+    deleted = hub.cleanup_library(library_root, delete=True, include_partials=True, older_than_days=0)
+
+    assert deleted["deleted"] == [str(library_partial), str(cache_partial)]
+    assert not library_partial.exists()
+    assert not cache_partial.exists()
+    assert lock_file.exists()
 
 
 def test_directory_size_sums_nested_files(tmp_path):

@@ -222,6 +222,50 @@ def remove_installed_model(library_dir: Path, ref: HubRef) -> None:
     shutil.rmtree(root)
 
 
+def _is_partial_file(path: Path) -> bool:
+    return ".incomplete" in path.name or ".tmp" in path.name
+
+
+def _partial_scan_roots(library_dir: Path) -> list[tuple[Path, str]]:
+    roots: list[tuple[Path, str]] = []
+    seen: set[Path] = set()
+    for root, source in (
+        (Path(library_dir), "library"),
+        (Path(HF_HUB_CACHE), "huggingface_cache"),
+    ):
+        if not root.exists():
+            continue
+        resolved = root.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        roots.append((root, source))
+    return roots
+
+
+def _collect_stale_partials(root: Path, source: str, cutoff: float) -> list[dict[str, Any]]:
+    stale_partials: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or not _is_partial_file(path):
+            continue
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        if stat.st_mtime > cutoff:
+            continue
+        stale_partials.append(
+            {
+                "path": str(path),
+                "name": path.name,
+                "size": stat.st_size,
+                "modified_at": stat.st_mtime,
+                "source": source,
+            }
+        )
+    return stale_partials
+
+
 def cleanup_library(
     library_dir: Path,
     delete: bool = False,
@@ -230,25 +274,16 @@ def cleanup_library(
 ) -> dict[str, Any]:
     stale_partials: list[dict[str, Any]] = []
     cutoff = time.time() - older_than_days * 24 * 60 * 60
-    root = Path(library_dir)
 
-    if include_partials and root.exists():
-        for path in sorted(root.rglob("*")):
-            if not path.is_file():
-                continue
-            if ".incomplete" not in path.name and ".tmp" not in path.name:
-                continue
-            stat = path.stat()
-            if stat.st_mtime > cutoff:
-                continue
-            stale_partials.append(
-                {
-                    "path": str(path),
-                    "name": path.name,
-                    "size": stat.st_size,
-                    "modified_at": stat.st_mtime,
-                }
-            )
+    if include_partials:
+        seen_paths: set[Path] = set()
+        for root, source in _partial_scan_roots(library_dir):
+            for item in _collect_stale_partials(root, source, cutoff):
+                resolved_path = Path(item["path"]).resolve()
+                if resolved_path in seen_paths:
+                    continue
+                seen_paths.add(resolved_path)
+                stale_partials.append(item)
 
     deleted: list[str] = []
     if delete:
