@@ -337,6 +337,42 @@ def test_pull_snapshot_downloads_and_writes_metadata_without_network(monkeypatch
     ]
 
 
+def test_pull_snapshot_disables_xet_during_download(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_snapshot_download(**kwargs):
+        seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
+        local_dir = Path(kwargs["local_dir"])
+        local_dir.mkdir(parents=True)
+        return local_dir
+
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+    monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
+
+    hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
+
+    assert seen == ["1"]
+    assert os.environ.get("HF_HUB_DISABLE_XET") is None
+
+
+def test_pull_snapshot_restores_existing_xet_setting(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_snapshot_download(**kwargs):
+        seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
+        local_dir = Path(kwargs["local_dir"])
+        local_dir.mkdir(parents=True)
+        return local_dir
+
+    monkeypatch.setenv("HF_HUB_DISABLE_XET", "0")
+    monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
+
+    hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
+
+    assert seen == ["1"]
+    assert os.environ.get("HF_HUB_DISABLE_XET") == "0"
+
+
 def test_pull_snapshot_emits_byte_progress_from_hub_tqdm(monkeypatch, tmp_path):
     def fake_snapshot_download(**kwargs):
         progress_bar = kwargs["tqdm_class"](

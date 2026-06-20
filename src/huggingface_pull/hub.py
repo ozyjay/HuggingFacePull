@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -285,21 +286,29 @@ def pull_snapshot(
             progress({"type": "model-complete", "repo_id": ref.repo_id, "dry_run": True})
         return target
 
-    snapshot_path = Path(
-        snapshot_download(
-            repo_id=ref.repo_id,
-            revision=ref.revision,
-            repo_type=None if ref.repo_type == "model" else ref.repo_type,
-            local_dir=target,
-            allow_patterns=list(ref.allow_patterns) or None,
-            ignore_patterns=list(ref.ignore_patterns) or None,
-            endpoint=endpoint,
-            token=token,
-            tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
-            if progress is not None
-            else None,
+    previous_disable_xet = os.environ.get("HF_HUB_DISABLE_XET")
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    try:
+        snapshot_path = Path(
+            snapshot_download(
+                repo_id=ref.repo_id,
+                revision=ref.revision,
+                repo_type=None if ref.repo_type == "model" else ref.repo_type,
+                local_dir=target,
+                allow_patterns=list(ref.allow_patterns) or None,
+                ignore_patterns=list(ref.ignore_patterns) or None,
+                endpoint=endpoint,
+                token=token,
+                tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
+                if progress is not None
+                else None,
+            )
         )
-    )
+    finally:
+        if previous_disable_xet is None:
+            os.environ.pop("HF_HUB_DISABLE_XET", None)
+        else:
+            os.environ["HF_HUB_DISABLE_XET"] = previous_disable_xet
     marker = metadata_path(library_dir, ref)
     marker.parent.mkdir(parents=True, exist_ok=True)
     metadata = {
