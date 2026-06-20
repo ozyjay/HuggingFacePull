@@ -126,12 +126,11 @@ def test_search_models_maps_hf_model_info(monkeypatch):
         def __init__(self, endpoint):
             self.endpoint = endpoint
 
-        def list_models(self, search, limit, sort, direction, token):
+        def list_models(self, search, limit, sort, token):
             assert self.endpoint == "https://hf.example"
             assert search == "qwen"
             assert limit == 20
             assert sort == "downloads"
-            assert direction == -1
             assert token == "secret"
             return [
                 SimpleNamespace(
@@ -161,6 +160,32 @@ def test_search_models_maps_hf_model_info(monkeypatch):
         ],
         "error": None,
     }
+
+
+def test_search_models_uses_list_models_signature_without_direction(monkeypatch):
+    class FakeApi:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+        def list_models(self, *, search, limit, sort, token):
+            assert self.endpoint == "https://hf.example"
+            assert search == "Qwen2.5-1.5B-Instruct"
+            assert limit == 20
+            assert sort == "downloads"
+            assert token == "secret"
+            return [SimpleNamespace(modelId="Qwen/Qwen2.5-1.5B-Instruct")]
+
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+
+    result = hub.search_models(
+        "Qwen2.5-1.5B-Instruct",
+        endpoint="https://hf.example",
+        token="secret",
+    )
+
+    assert result["available"] is True
+    assert result["results"][0]["repo_id"] == "Qwen/Qwen2.5-1.5B-Instruct"
+    assert result["error"] is None
 
 
 def test_search_models_returns_unavailable_on_api_error(monkeypatch):

@@ -4,18 +4,16 @@ Local FastAPI tool for searching, queueing, and downloading Hugging Face Hub mod
 
 ## Setup
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -e ".[dev]"
+```powershell
+./scripts/setup.ps1
 ```
 
 This project expects `python3` from the active `pyenv` version.
 
 ## Run the Web UI
 
-```bash
-hfpull-web
+```powershell
+./scripts/run.ps1
 ```
 
 The web UI binds to `127.0.0.1:8019` by default and opens the local browser.
@@ -44,8 +42,8 @@ Set `HUGGINGFACE_PULL_LIBRARY=/path/to/library` to use another location.
 
 ## Development
 
-```bash
-python3 -m pytest -v
-python3 -m py_compile src/huggingface_pull/*.py tests/*.py
-node --check src/huggingface_pull/web/app.js
+```powershell
+./scripts/test.ps1
 ```
+
+Use `./scripts/test.ps1 -Install` to refresh the editable dev install before running tests.

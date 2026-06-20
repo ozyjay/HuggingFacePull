@@ -69,7 +69,6 @@ def search_models(
             search=query,
             limit=20,
             sort="downloads",
-            direction=-1,
             token=token,
         )
         results = [
