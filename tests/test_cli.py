@@ -1,5 +1,5 @@
+import huggingface_pull.cli as cli
 from huggingface_pull.cli import build_parser
-from huggingface_pull.cli import run_web
 
 
 def test_parser_accepts_repo_revision_and_filters():
@@ -24,5 +24,22 @@ def test_parser_accepts_repo_revision_and_filters():
     assert args.repo_type == "model"
 
 
-def test_run_web_without_args_returns_non_zero_placeholder():
-    assert run_web([]) != 0
+def test_run_web_without_args_starts_server(monkeypatch):
+    opened = []
+    ran = []
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            for handler in self.config.app.router.on_startup:
+                handler()
+            ran.append(True)
+
+    monkeypatch.setattr(cli.webbrowser, "open", opened.append)
+    monkeypatch.setattr(cli.uvicorn, "Server", FakeServer)
+
+    assert cli.run_web([]) == 0
+    assert ran == [True]
+    assert opened == ["http://127.0.0.1:8019/"]

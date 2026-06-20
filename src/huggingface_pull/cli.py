@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import webbrowser
+from pathlib import Path
+
+import uvicorn
+
+from .api import create_app
+from .config import default_library_dir
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,9 +31,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_web_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(
-        description="Launch the local HuggingFacePull web UI."
+    parser = argparse.ArgumentParser(
+        description="Run the HuggingFacePull local web app."
     )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8019)
+    parser.add_argument("--library-dir", type=Path, default=default_library_dir())
+    return parser
+
+
+def _browser_url(host: str, port: int) -> str:
+    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    if ":" in browser_host and not browser_host.startswith("["):
+        browser_host = f"[{browser_host}]"
+    return f"http://{browser_host}:{port}/"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,6 +53,15 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_web(argv: list[str] | None = None) -> int:
-    build_web_parser().parse_args(argv)
-    print("The HuggingFacePull web UI is not implemented yet.", file=sys.stderr)
-    return 1
+    args = build_web_parser().parse_args(argv)
+    app = create_app(library_dir=args.library_dir.expanduser())
+    browser_url = _browser_url(args.host, args.port)
+
+    def open_browser() -> None:
+        webbrowser.open(browser_url)
+
+    app.router.on_startup.append(open_browser)
+    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
+    server = uvicorn.Server(config)
+    server.run()
+    return 0
