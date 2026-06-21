@@ -27,3 +27,18 @@ def test_powershell_scripts_cover_core_workflows():
     assert "hfpull-web" in run
     assert "HF_HUB_CACHE" in cache_lister
     assert "--json" in cache_lister
+
+
+def test_gitignore_blocks_project_local_model_artifacts():
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+
+    for pattern in (
+        "hf-test/",
+        "models/",
+        "library/",
+        ".cache/huggingface/",
+        "*.safetensors",
+        "*.gguf",
+        "*.bin",
+    ):
+        assert pattern in gitignore

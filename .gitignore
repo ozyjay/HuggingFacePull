@@ -28,6 +28,13 @@ logs/
 library/
 cache/
 hf-test/
+models/
+.cache/huggingface/
+
+# Local model artefacts
+*.safetensors
+*.gguf
+*.bin
 
 # macOS
 .DS_Store

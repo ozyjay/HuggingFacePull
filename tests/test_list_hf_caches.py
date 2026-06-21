@@ -42,6 +42,7 @@ def test_discovers_env_defaults_and_project_local_caches(tmp_path, monkeypatch):
     assert by_label["default: datasets"]["path"] == str(datasets)
     assert by_label["project: .cache/huggingface"]["path"] == str(project_cache)
     assert "default: huggingfacepull" not in by_label
+    assert "project: hf-test" not in by_label
     assert by_label["HF_HUB_CACHE"]["exists"] is True
     assert by_label["HF_HUB_CACHE"]["file_count"] == 1
     assert by_label["HF_HUB_CACHE"]["size_bytes"] == 5
@@ -61,6 +62,7 @@ def test_json_output_is_parseable(tmp_path, capsys):
     labels = {entry["label"] for entry in payload}
     assert "default: huggingface hub" in labels
     assert "default: huggingfacepull" not in labels
+    assert "project: hf-test" not in labels
     assert any(entry["size_bytes"] == 4 for entry in payload)
 
 

@@ -58,15 +58,17 @@ First verify the Hugging Face client path directly:
 
 ```python
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from huggingface_hub import snapshot_download
 
-snapshot_download(
-    repo_id="Qwen/Qwen3-Embedding-0.6B",
-    allow_patterns=["*.json", "*.safetensors"],
-    cache_dir=Path.home() / ".cache" / "huggingface" / "hub",
-    max_workers=1,
-)
+with TemporaryDirectory(prefix="hfpull-smoke-") as temp_dir:
+    snapshot_download(
+        repo_id="Qwen/Qwen3-Embedding-0.6B",
+        allow_patterns=["*.json", "*.safetensors"],
+        local_dir=Path(temp_dir) / "Qwen3-Embedding-0.6B",
+        max_workers=1,
+    )
 ```
 
 HuggingFacePull forces `HF_HUB_DISABLE_XET=1` during transfers. Xet has been tried;

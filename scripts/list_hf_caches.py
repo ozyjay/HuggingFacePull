@@ -18,7 +18,6 @@ ENV_CACHE_VARS = (
 
 PROJECT_CACHE_PATHS = (
     ".cache/huggingface",
-    "hf-test",
     "models",
     "cache",
     "library",
