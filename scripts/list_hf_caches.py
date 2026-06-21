@@ -48,7 +48,6 @@ def discover_caches(
         ("default: huggingface hub", hf_home / "hub"),
         ("default: datasets", hf_home / "datasets"),
         ("default: transformers", hf_home / "transformers"),
-        ("default: huggingfacepull", home / ".cache" / "huggingfacepull"),
     )
     for label, path in defaults:
         _add_entry(entries, seen, label, path)
@@ -176,7 +175,7 @@ def print_table(entries: list[dict[str, Any]]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="List Hugging Face cache locations and local HuggingFacePull cache candidates."
+        description="List Hugging Face cache locations and local cache candidates."
     )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     parser.add_argument("--home", type=Path, help=argparse.SUPPRESS)
