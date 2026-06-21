@@ -120,7 +120,7 @@
     const selected = selectedItem(items);
 
     els.runtimeSummary.textContent = snapshot.library_dir
-      ? `Library directory: ${snapshot.library_dir} | Hub endpoint: ${snapshot.endpoint || "unknown"}`
+      ? `Metadata directory: ${snapshot.library_dir} | Model cache: ~/.cache/huggingface/hub | Hub endpoint: ${snapshot.endpoint || "unknown"}`
       : "Loading local state...";
     els.queueSummary.textContent = `${items.length} item${items.length === 1 ? "" : "s"} | ${queueRunState(snapshot)}`;
     els.installedSummary.textContent = `${installed.length} snapshot${installed.length === 1 ? "" : "s"}`;
@@ -378,7 +378,7 @@
 
   function renderInstalled(installed) {
     if (!installed.length) {
-      els.installedList.innerHTML = `<p class="empty">No installed snapshots found in the library directory.</p>`;
+      els.installedList.innerHTML = `<p class="empty">No installed snapshots found in metadata or the HF cache.</p>`;
       return;
     }
 

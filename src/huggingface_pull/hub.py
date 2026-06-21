@@ -447,14 +447,15 @@ def pull_snapshot(
     stop_after_file: StopAfterFileCallback | None = None,
     max_workers: int | None = None,
 ) -> Path:
-    target = metadata_path(library_dir, ref).parent
+    marker = metadata_path(library_dir, ref)
+    metadata_dir = marker.parent
     if progress is not None:
         progress({"type": "manifest-fetch", "repo_id": ref.repo_id, "revision": ref.revision})
 
     if dry_run:
         if progress is not None:
             progress({"type": "model-complete", "repo_id": ref.repo_id, "dry_run": True})
-        return target
+        return metadata_dir
 
     previous_disable_xet = os.environ.get("HF_HUB_DISABLE_XET")
     os.environ["HF_HUB_DISABLE_XET"] = "1"
@@ -488,13 +489,12 @@ def pull_snapshot(
                     "files": files,
                 }
             )
-        target.mkdir(parents=True, exist_ok=True)
         snapshot_path = Path(
             _snapshot_download_func()(
                 repo_id=ref.repo_id,
                 revision=ref.revision,
                 repo_type=None if ref.repo_type == "model" else ref.repo_type,
-                local_dir=target,
+                cache_dir=Path(HF_HUB_CACHE),
                 endpoint=endpoint,
                 token=token,
                 allow_patterns=list(ref.allow_patterns) or None,
@@ -512,14 +512,13 @@ def pull_snapshot(
             os.environ.pop("HF_HUB_DISABLE_XET", None)
         else:
             os.environ["HF_HUB_DISABLE_XET"] = previous_disable_xet
-    marker = metadata_path(library_dir, ref)
-    marker.parent.mkdir(parents=True, exist_ok=True)
+    metadata_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "repo_id": ref.repo_id,
         "revision": ref.revision,
         "repo_type": ref.repo_type,
         "snapshot_path": str(snapshot_path),
-        "size": directory_size(marker.parent),
+        "size": directory_size(snapshot_path),
     }
     marker.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
 

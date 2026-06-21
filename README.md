@@ -45,20 +45,26 @@ hfpull gc
 hfpull gc --delete --include-partials --older-than-days 7
 ```
 
-By default, snapshots are written under `~/.cache/huggingfacepull/library`.
-Set `HUGGINGFACE_PULL_LIBRARY=/path/to/library` to use another location.
+By default, model payloads are stored in the standard Hugging Face cache:
+`~/.cache/huggingface/hub`.
+
+HuggingFacePull keeps small `.huggingfacepull.json` metadata markers under
+`~/.cache/huggingfacepull/library`. Set `HUGGINGFACE_PULL_LIBRARY=/path/to/library`
+to move those metadata markers.
 
 ## Troubleshooting Downloads
 
 First verify the Hugging Face client path directly:
 
 ```python
+from pathlib import Path
+
 from huggingface_hub import snapshot_download
 
 snapshot_download(
     repo_id="Qwen/Qwen3-Embedding-0.6B",
     allow_patterns=["*.json", "*.safetensors"],
-    local_dir="hf-test/Qwen3-Embedding-0.6B",
+    cache_dir=Path.home() / ".cache" / "huggingface" / "hub",
     max_workers=1,
 )
 ```

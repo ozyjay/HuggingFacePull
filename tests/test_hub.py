@@ -27,7 +27,7 @@ def install_fake_hub(monkeypatch, files, snapshot_func=None, endpoint="https://h
             )
 
     def default_snapshot_download(**kwargs):
-        local_dir = Path(kwargs["local_dir"])
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
         for file in files:
             path = local_dir / file["path"]
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -408,8 +408,9 @@ def test_pull_snapshot_dry_run_emits_progress_and_skips_download(monkeypatch, tm
     assert not hub.metadata_path(tmp_path, ref).exists()
 
 
-def test_pull_snapshot_uses_snapshot_download_and_writes_metadata_without_network(monkeypatch, tmp_path):
+def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeypatch, tmp_path):
     calls = []
+    cache_dir = tmp_path / "hf-cache"
 
     class FakeApi:
         def __init__(self, endpoint):
@@ -431,13 +432,15 @@ def test_pull_snapshot_uses_snapshot_download_and_writes_metadata_without_networ
 
     def fake_snapshot_download(**kwargs):
         calls.append(kwargs)
-        local_dir = Path(kwargs["local_dir"])
-        local_dir.mkdir(parents=True, exist_ok=True)
-        (local_dir / "weights.bin").write_bytes(b"1234567")
-        return str(local_dir)
+        assert "local_dir" not in kwargs
+        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (snapshot_dir / "weights.bin").write_bytes(b"1234567")
+        return str(snapshot_dir)
 
     monkeypatch.setattr(hub, "HfApi", FakeApi)
     monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache_dir))
     events = []
     ref = hub.HubRef(
         repo_id="Qwen/Qwen3",
@@ -454,14 +457,15 @@ def test_pull_snapshot_uses_snapshot_download_and_writes_metadata_without_networ
         progress=events.append,
     )
 
-    target = tmp_path / "Qwen--Qwen3" / "v1"
+    target = cache_dir / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+    marker = hub.metadata_path(tmp_path, ref)
     assert snapshot_path == target
     assert calls == [
         {
             "repo_id": "Qwen/Qwen3",
             "revision": "v1",
             "repo_type": None,
-            "local_dir": target,
+            "cache_dir": cache_dir,
             "endpoint": "https://hf.example",
             "token": "secret",
             "allow_patterns": ["*.bin"],
@@ -471,7 +475,7 @@ def test_pull_snapshot_uses_snapshot_download_and_writes_metadata_without_networ
         }
     ]
     assert calls[0]["tqdm_class"] is not None
-    metadata = json.loads(hub.metadata_path(tmp_path, ref).read_text(encoding="utf-8"))
+    metadata = json.loads(marker.read_text(encoding="utf-8"))
     assert metadata == {
         "repo_id": "Qwen/Qwen3",
         "revision": "v1",
@@ -479,6 +483,7 @@ def test_pull_snapshot_uses_snapshot_download_and_writes_metadata_without_networ
         "snapshot_path": str(target),
         "size": 7,
     }
+    assert sorted(path.name for path in marker.parent.iterdir()) == [".huggingfacepull.json"]
     assert events == [
         {"type": "manifest-fetch", "repo_id": "Qwen/Qwen3", "revision": "v1"},
         {
@@ -497,10 +502,10 @@ def test_pull_snapshot_passes_none_for_empty_snapshot_patterns(monkeypatch, tmp_
 
     def fake_snapshot_download(**kwargs):
         calls.append(kwargs)
-        local_dir = Path(kwargs["local_dir"])
-        local_dir.mkdir(parents=True, exist_ok=True)
-        (local_dir / "config.json").write_text("{}", encoding="utf-8")
-        return str(local_dir)
+        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (snapshot_dir / "config.json").write_text("{}", encoding="utf-8")
+        return str(snapshot_dir)
 
     install_fake_hub(
         monkeypatch,
@@ -512,6 +517,8 @@ def test_pull_snapshot_passes_none_for_empty_snapshot_patterns(monkeypatch, tmp_
 
     assert calls[0]["allow_patterns"] is None
     assert calls[0]["ignore_patterns"] is None
+    assert "local_dir" not in calls[0]
+    assert Path(calls[0]["cache_dir"]) == Path(hub.HF_HUB_CACHE)
 
 
 def test_pull_snapshot_disables_xet_before_lazy_hub_import(monkeypatch, tmp_path):
@@ -519,7 +526,7 @@ def test_pull_snapshot_disables_xet_before_lazy_hub_import(monkeypatch, tmp_path
 
     def fake_snapshot_download(**kwargs):
         seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
-        local_dir = Path(kwargs["local_dir"])
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"data")
         return str(local_dir)
@@ -542,7 +549,7 @@ def test_pull_snapshot_restores_existing_xet_setting(monkeypatch, tmp_path):
 
     def fake_snapshot_download(**kwargs):
         seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
-        local_dir = Path(kwargs["local_dir"])
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"data")
         return str(local_dir)
@@ -574,7 +581,7 @@ def test_pull_snapshot_emits_aggregate_byte_progress_from_snapshot_tqdm(monkeypa
         progress_bar.update(10)
         progress_bar.close()
 
-        local_dir = Path(kwargs["local_dir"])
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"123")
         return str(local_dir)
@@ -634,7 +641,7 @@ def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
             progress_bar.update(10)
         progress_bar.close()
 
-        local_dir = Path(kwargs["local_dir"])
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"x" * 40)
         return str(local_dir)
@@ -686,7 +693,7 @@ def test_pull_snapshot_stops_after_snapshot_progress_when_requested(monkeypatch,
         stop_requested = True
         progress_bar.update(10)
 
-        local_dir = Path(kwargs["local_dir"])
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"x" * 20)
         return str(local_dir)
@@ -711,7 +718,7 @@ def test_pull_snapshot_stops_after_snapshot_progress_when_requested(monkeypatch,
 
 def test_pull_snapshot_raises_stop_after_file_after_metadata(monkeypatch, tmp_path):
     def fake_snapshot_download(**kwargs):
-        local_dir = Path(kwargs["local_dir"])
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"data")
         return str(local_dir)
