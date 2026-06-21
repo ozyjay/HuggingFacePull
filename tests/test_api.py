@@ -320,6 +320,10 @@ def test_run_web_constructs_uvicorn_server_and_opens_browser_on_startup(monkeypa
 
     monkeypatch.setattr(cli_module, "uvicorn", FakeUvicorn)
     monkeypatch.setattr(cli_module.webbrowser, "open", opened.append)
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+    monkeypatch.delenv("HF_HUB_DOWNLOAD_TIMEOUT", raising=False)
+    monkeypatch.delenv("HF_HUB_ETAG_TIMEOUT", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_PULL_MAX_WORKERS", raising=False)
     monkeypatch.setattr(
         cli_module,
         "write_log",
