@@ -77,7 +77,7 @@ def test_search_install_state_matches_repo_revision_and_type():
 
 def test_download_status_helpers_show_running_and_unknown_total_details():
     script = textwrap.dedent(
-        """
+        r"""
         const assert = require("node:assert/strict");
         const fs = require("node:fs");
         const vm = require("node:vm");
@@ -122,6 +122,39 @@ def test_download_status_helpers_show_running_and_unknown_total_details():
             },
           }),
           "Downloading weights.safetensors | Downloaded 1.50 KB | total calculating...",
+        );
+
+        assert.match(
+          context.window.HuggingFacePull.downloadStatusLine({
+            status: "running",
+            updated_at: 1782014195,
+            progress: {
+              phase: "downloading",
+              stalled: true,
+              stall_seconds: 125,
+              overall: { downloaded: 1536, total: 4096, percent: 37.5 },
+              current_file: {
+                path: "model.safetensors",
+                index: 7,
+                total_files: 10,
+                updated_at: 1782014195,
+              },
+            },
+          }),
+          /^Downloading file 7\/10 model\.safetensors \| last update .* \| no update for 2m 5s \| 37\.5% \| 1\.50 KB \/ 4\.00 KB$/,
+        );
+
+        assert.match(
+          context.window.HuggingFacePull.downloadStatusLine({
+            status: "running",
+            updated_at: 1,
+            progress: {
+              phase: "downloading",
+              overall: { downloaded: 1536, total: 4096, percent: 37.5 },
+              current_file: { path: "model.safetensors", index: 7, total_files: 10 },
+            },
+          }),
+          /^Downloading file 7\/10 model\.safetensors \| last update .* \| no update for .* \| 37\.5% \| 1\.50 KB \/ 4\.00 KB$/,
         );
         """
     )

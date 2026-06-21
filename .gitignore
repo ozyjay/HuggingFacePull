@@ -27,6 +27,7 @@ logs/
 .hfpull/
 library/
 cache/
+hf-test/
 
 # macOS
 .DS_Store

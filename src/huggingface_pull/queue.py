@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from . import hub
 from .app_logging import write_log
-from .config import DEFAULT_ENDPOINT
+from .config import DEFAULT_ENDPOINT, default_max_workers, default_stall_timeout_seconds
 from .hub import DownloadStoppedAfterFile, HubRef, canonical_ref, pull_snapshot
 
 
@@ -18,6 +18,7 @@ PullFunc = Callable[..., Any]
 PROGRESS_LOG_INTERVAL_SECONDS = 30.0
 PROGRESS_LOG_PERCENT_STEP = 5.0
 PROCESS_EVENT_POLL_SECONDS = 0.1
+STALLED_PROGRESS_SECONDS = 60.0
 
 
 class DownloadForceStopped(Exception):
@@ -41,11 +42,13 @@ class DownloadQueue:
         token: str | None = None,
         pull_func: PullFunc = pull_snapshot,
         hard_stop_downloads: bool | None = None,
+        max_workers: int | None = None,
     ) -> None:
         self.library_dir = Path(library_dir)
         self.endpoint = endpoint
         self.token = token
         self.pull_func = pull_func
+        self.max_workers = max_workers if max_workers is not None else default_max_workers()
         self.hard_stop_downloads = (
             pull_func is pull_snapshot if hard_stop_downloads is None else hard_stop_downloads
         )
@@ -289,6 +292,7 @@ class DownloadQueue:
                 endpoint=self.endpoint,
                 token=self.token,
                 dry_run=False,
+                max_workers=self.max_workers,
                 progress=progress,
                 stop_after_file=self._stop_after_file_requested_locked,
             )
@@ -303,20 +307,25 @@ class DownloadQueue:
             progress=progress,
             hard_stop_requested=self._stop_after_file_requested_locked,
             pause_after_file_requested=self._pause_requested_locked,
+            max_workers=self.max_workers,
+            stall_timeout_seconds=default_stall_timeout_seconds(),
         )
 
     def _record_progress(self, item_id: str, event: dict[str, Any]) -> None:
         with self._condition:
             item = self._find_item(item_id)
+            now = time.time()
             event_type = event.get("type")
             if event_type is not None and event_type != "download-progress":
                 self._append_message_locked(item, str(event_type))
-            self._update_progress_locked(item, event)
+            self._update_progress_locked(item, event, now)
             self._log_progress_event_locked(item, event)
-            item["updated_at"] = time.time()
+            item["updated_at"] = now
             self._condition.notify_all()
 
-    def _update_progress_locked(self, item: dict[str, Any], event: dict[str, Any]) -> None:
+    def _update_progress_locked(
+        self, item: dict[str, Any], event: dict[str, Any], updated_at: float
+    ) -> None:
         event_type = event.get("type")
         progress = item["progress"]
         if event_type == "manifest-fetch":
@@ -344,19 +353,20 @@ class DownloadQueue:
                 "bytes_per_second": self._event_speed(event),
                 "eta_seconds": event.get("eta_seconds"),
                 "line": event.get("line"),
+                "updated_at": updated_at,
             }
             self._refresh_overall_locked(item)
             return
         if event_type in {"file-progress", "blob-progress"}:
             progress["phase"] = "downloading"
-            progress["current_file"] = self._file_progress_from_event(item, event)
+            progress["current_file"] = self._file_progress_from_event(item, event, updated_at)
             self._refresh_overall_locked(item)
             return
         if event_type in {"file-complete", "blob-complete"}:
             identifier = self._event_identifier(event)
             if identifier is not None:
                 item["_completed_files"][identifier] = event.get("total") or event.get("downloaded")
-            progress["current_file"] = self._file_progress_from_event(item, event)
+            progress["current_file"] = self._file_progress_from_event(item, event, updated_at)
             self._refresh_overall_locked(item)
             return
         if event_type == "download-progress":
@@ -365,6 +375,7 @@ class DownloadQueue:
             progress["current_file"] = {
                 "name": "snapshot",
                 **self._aggregate_progress_from_event(event),
+                "updated_at": updated_at,
             }
             return
         if event_type in {"failure", "failed", "error"}:
@@ -401,7 +412,7 @@ class DownloadQueue:
         return planned
 
     def _file_progress_from_event(
-        self, item: dict[str, Any], event: dict[str, Any]
+        self, item: dict[str, Any], event: dict[str, Any], updated_at: float
     ) -> dict[str, Any]:
         identifier = self._event_identifier(event)
         return {
@@ -413,6 +424,7 @@ class DownloadQueue:
             "bytes_per_second": self._event_speed(event),
             "eta_seconds": event.get("eta_seconds"),
             "line": event.get("line"),
+            "updated_at": updated_at,
         }
 
     def _planned_total(
@@ -561,7 +573,25 @@ class DownloadQueue:
             if item["progress"]["current_file"] is not None
             else None,
         }
+        self._annotate_stalled_progress(copied)
         return copied
+
+    def _annotate_stalled_progress(self, item: dict[str, Any]) -> None:
+        if item.get("status") != "running":
+            return
+        progress = item.get("progress") or {}
+        last_update = item.get("updated_at")
+        if not isinstance(last_update, (int, float)):
+            return
+        quiet_for = max(0.0, time.time() - float(last_update))
+        if quiet_for < STALLED_PROGRESS_SECONDS:
+            return
+        progress["stalled"] = True
+        progress["stall_seconds"] = quiet_for
+        current = progress.get("current_file")
+        if isinstance(current, dict):
+            current["stalled"] = True
+            current["stall_seconds"] = quiet_for
 
     def _log_item(self, message: str, item: dict[str, Any], **fields: Any) -> None:
         self._log(
@@ -620,16 +650,30 @@ def _run_pull_in_process(
     progress: Callable[[dict[str, Any]], None],
     hard_stop_requested: Callable[[], bool],
     pause_after_file_requested: Callable[[], bool],
+    max_workers: int,
+    stall_timeout_seconds: float,
 ) -> None:
     context = multiprocessing.get_context("spawn")
     events = context.Queue()
     pause_after_file = context.Event()
     process = context.Process(
         target=_download_process_entry,
-        args=(pull_func, ref, Path(library_dir), endpoint, token, events, pause_after_file),
+        args=(
+            pull_func,
+            ref,
+            Path(library_dir),
+            endpoint,
+            token,
+            max_workers,
+            events,
+            pause_after_file,
+        ),
         daemon=True,
     )
     process.start()
+    started_at = time.monotonic()
+    last_activity_at = started_at
+    last_progress: dict[str, Any] | None = None
     try:
         while True:
             if hard_stop_requested():
@@ -645,9 +689,23 @@ def _run_pull_in_process(
                     if process.exitcode == 0:
                         return
                     raise RuntimeError(f"download process exited with code {process.exitcode}")
+                now = time.monotonic()
+                if now - last_activity_at >= stall_timeout_seconds:
+                    _terminate_process(process)
+                    raise RuntimeError(
+                        _stall_error_message(
+                            ref,
+                            last_progress=last_progress,
+                            elapsed_seconds=now - started_at,
+                            quiet_seconds=now - last_activity_at,
+                        )
+                    )
                 continue
 
+            last_activity_at = time.monotonic()
             if kind == "progress":
+                if isinstance(payload, dict):
+                    last_progress = payload
                 progress(payload)
                 continue
             if kind == "done":
@@ -670,6 +728,7 @@ def _download_process_entry(
     library_dir: Path,
     endpoint: str,
     token: str | None,
+    max_workers: int,
     events: Any,
     pause_after_file: Any,
 ) -> None:
@@ -680,6 +739,7 @@ def _download_process_entry(
             endpoint=endpoint,
             token=token,
             dry_run=False,
+            max_workers=max_workers,
             progress=lambda event: events.put(("progress", event)),
             stop_after_file=pause_after_file.is_set,
         )
@@ -697,3 +757,31 @@ def _terminate_process(process: multiprocessing.Process) -> None:
     if process.is_alive():
         process.kill()
         process.join(timeout=2)
+
+
+def _stall_error_message(
+    ref: HubRef,
+    *,
+    last_progress: dict[str, Any] | None,
+    elapsed_seconds: float,
+    quiet_seconds: float,
+) -> str:
+    progress = last_progress or {}
+    current_file = (
+        progress.get("path")
+        or progress.get("name")
+        or progress.get("digest")
+        or progress.get("blob_id")
+        or "snapshot"
+    )
+    downloaded = progress.get("downloaded")
+    return (
+        "download stalled; "
+        f"repo_id={ref.repo_id}; "
+        f"current_file={current_file}; "
+        f"downloaded_bytes={downloaded}; "
+        f"elapsed_seconds={int(elapsed_seconds)}; "
+        f"quiet_seconds={int(quiet_seconds)}; "
+        "retry advice: retry the item, clean stale partials if repeated, and use "
+        "pre-cached models for demos."
+    )

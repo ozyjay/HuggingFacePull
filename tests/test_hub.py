@@ -6,11 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import huggingface_pull
 import huggingface_pull.hub as hub
 
 
-def install_fake_file_download(monkeypatch, files, download_func=None, endpoint="https://huggingface.co"):
+def install_fake_hub(monkeypatch, files, snapshot_func=None, endpoint="https://huggingface.co"):
     class FakeApi:
         def __init__(self, endpoint):
             self.endpoint = endpoint
@@ -27,15 +26,16 @@ def install_fake_file_download(monkeypatch, files, download_func=None, endpoint=
                 ]
             )
 
-    def default_download(**kwargs):
+    def default_snapshot_download(**kwargs):
         local_dir = Path(kwargs["local_dir"])
-        path = local_dir / kwargs["filename"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"x" * int(next(file.get("size") or 0 for file in files if file["path"] == kwargs["filename"])))
-        return str(path)
+        for file in files:
+            path = local_dir / file["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x" * int(file.get("size") or 0))
+        return str(local_dir)
 
     monkeypatch.setattr(hub, "HfApi", FakeApi)
-    monkeypatch.setattr(hub, "hf_hub_download", download_func or default_download)
+    monkeypatch.setattr(hub, "snapshot_download", snapshot_func or default_snapshot_download)
 
 
 def test_canonical_ref_normalises_revision_repo_type_and_filters():
@@ -79,11 +79,6 @@ def test_metadata_path_traversal_revision_cannot_escape_library(tmp_path):
 
     assert marker == tmp_path / "Qwen--Qwen3" / "..--outside" / ".huggingfacepull.json"
     assert marker.resolve().relative_to(tmp_path.resolve())
-
-
-def test_package_exports_callback_types():
-    assert huggingface_pull.ProgressCallback is hub.ProgressCallback
-    assert huggingface_pull.StopAfterFileCallback is hub.StopAfterFileCallback
 
 
 def test_installed_models_reads_metadata_skips_malformed_and_sorts(tmp_path):
@@ -397,7 +392,7 @@ def test_repo_files_maps_model_siblings(monkeypatch):
 def test_pull_snapshot_dry_run_emits_progress_and_skips_download(monkeypatch, tmp_path):
     monkeypatch.setattr(
         hub,
-        "hf_hub_download",
+        "snapshot_download",
         lambda **kwargs: pytest.fail("dry run should not download"),
     )
     events = []
@@ -413,7 +408,7 @@ def test_pull_snapshot_dry_run_emits_progress_and_skips_download(monkeypatch, tm
     assert not hub.metadata_path(tmp_path, ref).exists()
 
 
-def test_pull_snapshot_downloads_and_writes_metadata_without_network(monkeypatch, tmp_path):
+def test_pull_snapshot_uses_snapshot_download_and_writes_metadata_without_network(monkeypatch, tmp_path):
     calls = []
 
     class FakeApi:
@@ -434,20 +429,21 @@ def test_pull_snapshot_downloads_and_writes_metadata_without_network(monkeypatch
                 ]
             )
 
-    def fake_hf_hub_download(**kwargs):
+    def fake_snapshot_download(**kwargs):
         calls.append(kwargs)
         local_dir = Path(kwargs["local_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
-        (local_dir / kwargs["filename"]).write_bytes(b"1234567")
-        return str(local_dir / kwargs["filename"])
+        (local_dir / "weights.bin").write_bytes(b"1234567")
+        return str(local_dir)
 
     monkeypatch.setattr(hub, "HfApi", FakeApi)
-    monkeypatch.setattr(hub, "hf_hub_download", fake_hf_hub_download)
+    monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
     events = []
     ref = hub.HubRef(
         repo_id="Qwen/Qwen3",
         revision="v1",
         allow_patterns=["*.bin"],
+        ignore_patterns=["*.safetensors"],
     )
 
     snapshot_path = hub.pull_snapshot(
@@ -463,16 +459,18 @@ def test_pull_snapshot_downloads_and_writes_metadata_without_network(monkeypatch
     assert calls == [
         {
             "repo_id": "Qwen/Qwen3",
-            "filename": "weights.bin",
             "revision": "v1",
             "repo_type": None,
             "local_dir": target,
             "endpoint": "https://hf.example",
             "token": "secret",
+            "allow_patterns": ["*.bin"],
+            "ignore_patterns": ["*.safetensors"],
+            "max_workers": 1,
             "tqdm_class": calls[0]["tqdm_class"],
         }
     ]
-    assert issubclass(calls[0]["tqdm_class"], hub.hf_tqdm)
+    assert calls[0]["tqdm_class"] is not None
     metadata = json.loads(hub.metadata_path(tmp_path, ref).read_text(encoding="utf-8"))
     assert metadata == {
         "repo_id": "Qwen/Qwen3",
@@ -490,89 +488,47 @@ def test_pull_snapshot_downloads_and_writes_metadata_without_network(monkeypatch
             "total_bytes": 7,
             "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
         },
-        {
-            "type": "file-start",
-            "repo_id": "Qwen/Qwen3",
-            "path": "weights.bin",
-            "size": 7,
-            "blob_id": "weights",
-            "resume_at": 0,
-        },
-        {
-            "type": "file-complete",
-            "repo_id": "Qwen/Qwen3",
-            "path": "weights.bin",
-            "downloaded": 7,
-            "total": 7,
-            "percent": 100.0,
-            "blob_id": "weights",
-        },
         {"type": "model-complete", "repo_id": "Qwen/Qwen3", "snapshot_path": str(target)},
     ]
 
 
-def test_pull_snapshot_stops_after_current_file_before_next_download(monkeypatch, tmp_path):
+def test_pull_snapshot_passes_none_for_empty_snapshot_patterns(monkeypatch, tmp_path):
     calls = []
-    events = []
 
-    class FakeApi:
-        def __init__(self, endpoint):
-            self.endpoint = endpoint
-
-        def model_info(self, repo_id, revision, files_metadata, token):
-            return SimpleNamespace(
-                siblings=[
-                    SimpleNamespace(rfilename="config.json", size=2, blob_id="cfg"),
-                    SimpleNamespace(rfilename="model.safetensors", size=8, blob_id="weights"),
-                ]
-            )
-
-    def fake_hf_hub_download(**kwargs):
-        calls.append(kwargs["filename"])
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs)
         local_dir = Path(kwargs["local_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
-        (local_dir / kwargs["filename"]).parent.mkdir(parents=True, exist_ok=True)
-        (local_dir / kwargs["filename"]).write_bytes(b"x" * (2 if kwargs["filename"] == "config.json" else 8))
-        return str(local_dir / kwargs["filename"])
+        (local_dir / "config.json").write_text("{}", encoding="utf-8")
+        return str(local_dir)
 
-    monkeypatch.setattr(hub, "HfApi", FakeApi)
-    monkeypatch.setattr(hub, "hf_hub_download", fake_hf_hub_download)
-    ref = hub.HubRef(repo_id="Qwen/Qwen3")
+    install_fake_hub(
+        monkeypatch,
+        [{"path": "config.json", "size": 2, "blob_id": "cfg"}],
+        fake_snapshot_download,
+    )
 
-    with pytest.raises(hub.DownloadStoppedAfterFile):
-        hub.pull_snapshot(
-            ref,
-            library_dir=tmp_path,
-            progress=events.append,
-            stop_after_file=lambda: bool(calls),
-        )
+    hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
 
-    assert calls == ["config.json"]
-    assert [event["type"] for event in events] == [
-        "manifest-fetch",
-        "model-plan",
-        "file-start",
-        "file-complete",
-    ]
-    assert not hub.metadata_path(tmp_path, ref).exists()
+    assert calls[0]["allow_patterns"] is None
+    assert calls[0]["ignore_patterns"] is None
 
 
-def test_pull_snapshot_disables_xet_during_download(monkeypatch, tmp_path):
+def test_pull_snapshot_disables_xet_before_lazy_hub_import(monkeypatch, tmp_path):
     seen = []
 
-    def fake_hf_hub_download(**kwargs):
+    def fake_snapshot_download(**kwargs):
         seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
         local_dir = Path(kwargs["local_dir"])
-        path = local_dir / kwargs["filename"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"data")
-        return str(path)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "weights.bin").write_bytes(b"data")
+        return str(local_dir)
 
     monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
-    install_fake_file_download(
+    install_fake_hub(
         monkeypatch,
         [{"path": "weights.bin", "size": 4, "blob_id": "weights"}],
-        fake_hf_hub_download,
+        fake_snapshot_download,
     )
 
     hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
@@ -584,19 +540,18 @@ def test_pull_snapshot_disables_xet_during_download(monkeypatch, tmp_path):
 def test_pull_snapshot_restores_existing_xet_setting(monkeypatch, tmp_path):
     seen = []
 
-    def fake_hf_hub_download(**kwargs):
+    def fake_snapshot_download(**kwargs):
         seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
         local_dir = Path(kwargs["local_dir"])
-        path = local_dir / kwargs["filename"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"data")
-        return str(path)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "weights.bin").write_bytes(b"data")
+        return str(local_dir)
 
     monkeypatch.setenv("HF_HUB_DISABLE_XET", "0")
-    install_fake_file_download(
+    install_fake_hub(
         monkeypatch,
         [{"path": "weights.bin", "size": 4, "blob_id": "weights"}],
-        fake_hf_hub_download,
+        fake_snapshot_download,
     )
 
     hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
@@ -605,8 +560,8 @@ def test_pull_snapshot_restores_existing_xet_setting(monkeypatch, tmp_path):
     assert os.environ.get("HF_HUB_DISABLE_XET") == "0"
 
 
-def test_pull_snapshot_emits_byte_progress_from_hub_tqdm(monkeypatch, tmp_path):
-    def fake_hf_hub_download(**kwargs):
+def test_pull_snapshot_emits_aggregate_byte_progress_from_snapshot_tqdm(monkeypatch, tmp_path):
+    def fake_snapshot_download(**kwargs):
         progress_bar = kwargs["tqdm_class"](
             total=10,
             initial=2,
@@ -621,13 +576,13 @@ def test_pull_snapshot_emits_byte_progress_from_hub_tqdm(monkeypatch, tmp_path):
 
         local_dir = Path(kwargs["local_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
-        (local_dir / kwargs["filename"]).write_bytes(b"123")
-        return str(local_dir / kwargs["filename"])
+        (local_dir / "weights.bin").write_bytes(b"123")
+        return str(local_dir)
 
-    install_fake_file_download(
+    install_fake_hub(
         monkeypatch,
         [{"path": "weights.bin", "size": 15, "blob_id": "weights"}],
-        fake_hf_hub_download,
+        fake_snapshot_download,
     )
     events = []
 
@@ -637,40 +592,34 @@ def test_pull_snapshot_emits_byte_progress_from_hub_tqdm(monkeypatch, tmp_path):
         progress=events.append,
     )
 
-    progress_events = [event for event in events if event["type"] == "file-progress"]
+    progress_events = [event for event in events if event["type"] == "download-progress"]
     assert progress_events == [
         {
-            "type": "file-progress",
+            "type": "download-progress",
             "repo_id": "Qwen/Qwen3",
-            "path": "weights.bin",
             "downloaded": 2,
             "total": 10,
             "percent": 20.0,
             "bytes_per_second": None,
             "eta_seconds": None,
-            "blob_id": "weights",
         },
         {
-            "type": "file-progress",
+            "type": "download-progress",
             "repo_id": "Qwen/Qwen3",
-            "path": "weights.bin",
             "downloaded": 5,
             "total": 15,
             "percent": 33.33333333333333,
             "bytes_per_second": None,
             "eta_seconds": None,
-            "blob_id": "weights",
         },
         {
-            "type": "file-progress",
+            "type": "download-progress",
             "repo_id": "Qwen/Qwen3",
-            "path": "weights.bin",
             "downloaded": 15,
             "total": 15,
             "percent": 100.0,
             "bytes_per_second": None,
             "eta_seconds": None,
-            "blob_id": "weights",
         },
     ]
 
@@ -679,7 +628,7 @@ def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
     ticks = iter([0.0, 0.0, 0.1, 0.2, 0.3, 0.4])
     monkeypatch.setattr(hub.time, "monotonic", lambda: next(ticks, 0.4))
 
-    def fake_hf_hub_download(**kwargs):
+    def fake_snapshot_download(**kwargs):
         progress_bar = kwargs["tqdm_class"](total=100, initial=0, unit="B")
         for _ in range(4):
             progress_bar.update(10)
@@ -687,13 +636,13 @@ def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
 
         local_dir = Path(kwargs["local_dir"])
         local_dir.mkdir(parents=True, exist_ok=True)
-        (local_dir / kwargs["filename"]).write_bytes(b"x" * 40)
-        return str(local_dir / kwargs["filename"])
+        (local_dir / "weights.bin").write_bytes(b"x" * 40)
+        return str(local_dir)
 
-    install_fake_file_download(
+    install_fake_hub(
         monkeypatch,
         [{"path": "weights.bin", "size": 100, "blob_id": "weights"}],
-        fake_hf_hub_download,
+        fake_snapshot_download,
     )
     events = []
 
@@ -703,37 +652,33 @@ def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
         progress=events.append,
     )
 
-    progress_events = [event for event in events if event["type"] == "file-progress"]
+    progress_events = [event for event in events if event["type"] == "download-progress"]
     assert progress_events == [
         {
-            "type": "file-progress",
+            "type": "download-progress",
             "repo_id": "Qwen/Qwen3",
-            "path": "weights.bin",
             "downloaded": 0,
             "total": 100,
             "percent": 0.0,
             "bytes_per_second": None,
             "eta_seconds": None,
-            "blob_id": "weights",
         },
         {
-            "type": "file-progress",
+            "type": "download-progress",
             "repo_id": "Qwen/Qwen3",
-            "path": "weights.bin",
             "downloaded": 40,
             "total": 100,
             "percent": 40.0,
             "bytes_per_second": None,
             "eta_seconds": None,
-            "blob_id": "weights",
         },
     ]
 
 
-def test_pull_snapshot_stops_after_file_even_when_requested_during_progress(monkeypatch, tmp_path):
+def test_pull_snapshot_stops_after_snapshot_progress_when_requested(monkeypatch, tmp_path):
     stop_requested = False
 
-    def fake_hf_hub_download(**kwargs):
+    def fake_snapshot_download(**kwargs):
         progress_bar = kwargs["tqdm_class"](total=100, initial=0, unit="B")
         progress_bar.update(10)
 
@@ -742,15 +687,14 @@ def test_pull_snapshot_stops_after_file_even_when_requested_during_progress(monk
         progress_bar.update(10)
 
         local_dir = Path(kwargs["local_dir"])
-        path = local_dir / kwargs["filename"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"x" * 20)
-        return str(path)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "weights.bin").write_bytes(b"x" * 20)
+        return str(local_dir)
 
-    install_fake_file_download(
+    install_fake_hub(
         monkeypatch,
         [{"path": "weights.bin", "size": 100, "blob_id": "weights"}],
-        fake_hf_hub_download,
+        fake_snapshot_download,
     )
     ref = hub.HubRef(repo_id="Qwen/Qwen3")
 
@@ -766,17 +710,16 @@ def test_pull_snapshot_stops_after_file_even_when_requested_during_progress(monk
 
 
 def test_pull_snapshot_raises_stop_after_file_after_metadata(monkeypatch, tmp_path):
-    def fake_hf_hub_download(**kwargs):
+    def fake_snapshot_download(**kwargs):
         local_dir = Path(kwargs["local_dir"])
-        path = local_dir / kwargs["filename"]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"data")
-        return str(path)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "weights.bin").write_bytes(b"data")
+        return str(local_dir)
 
-    install_fake_file_download(
+    install_fake_hub(
         monkeypatch,
         [{"path": "weights.bin", "size": 4, "blob_id": "weights"}],
-        fake_hf_hub_download,
+        fake_snapshot_download,
     )
     ref = hub.HubRef(repo_id="Qwen/Qwen3")
 

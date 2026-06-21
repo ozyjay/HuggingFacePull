@@ -435,13 +435,14 @@
           <div><dt>Percent</dt><dd>${formatPercent(overall.percent)}</dd></div>
           <div><dt>Speed</dt><dd>${formatSpeed(overall.bytes_per_second)}</dd></div>
           <div><dt>ETA</dt><dd>${formatDuration(overall.eta_seconds)}</dd></div>
-          <div><dt>Current file</dt><dd>${current ? escapeHtml(current.path || current.name || current.digest || "active file") : "None"}</dd></div>
+          <div><dt>Current file</dt><dd>${current ? escapeHtml(currentFileLabel(current)) : "None"}</dd></div>
           <div><dt>File progress</dt><dd>${current ? `${formatBytes(current.downloaded)} / ${formatBytes(current.total)}` : "None"}</dd></div>
+          <div><dt>File update</dt><dd>${current ? formatTimestamp(current.updated_at || item.updated_at) : "unknown"}</dd></div>
           <div><dt>Last update</dt><dd>${formatTimestamp(item.updated_at)}</dd></div>
         </dl>
         ${item.error ? `<p class="error-text">${escapeHtml(item.error)}</p>` : ""}
         <ol class="message-list">
-          ${messages.length ? messages.map((message) => `<li>${escapeHtml(message.text || String(message))}</li>`).join("") : "<li>No messages yet.</li>"}
+          ${messages.length ? messages.map((message) => `<li>${escapeHtml(messageLine(message))}</li>`).join("") : "<li>No messages yet.</li>"}
         </ol>
       </div>
     `;
@@ -532,8 +533,16 @@
     const overall = progress.overall || {};
     const current = progress.current_file || {};
     const phase = progress.phase || item.status || "waiting";
-    const subject = current.path || current.name || current.digest || "snapshot";
+    const subject = currentFileLabel(current);
+    const lastUpdate = current.updated_at || item.updated_at;
+    const quietSeconds = progressQuietSeconds(item, progress, current);
     const parts = [`${titleCase(phase)} ${subject}`];
+    if (lastUpdate) {
+      parts.push(`last update ${formatTimestamp(lastUpdate)}`);
+    }
+    if (quietSeconds !== null) {
+      parts.push(`no update for ${formatDuration(quietSeconds)}`);
+    }
     const percent = formatPercent(overall.percent);
     if (percent !== "calculating") {
       parts.push(percent);
@@ -548,6 +557,38 @@
       parts.push(`ETA ${eta}`);
     }
     return parts.join(" | ");
+  }
+
+  function currentFileLabel(current) {
+    const name = current.path || current.name || current.digest || "snapshot";
+    if (current.index && current.total_files) {
+      return `file ${current.index}/${current.total_files} ${name}`;
+    }
+    return name;
+  }
+
+  function messageLine(message) {
+    if (!message || typeof message !== "object") {
+      return String(message);
+    }
+    const timestamp = message.timestamp ? `${formatTimestamp(message.timestamp)} ` : "";
+    return `${timestamp}${message.text || ""}`;
+  }
+
+  function progressQuietSeconds(item, progress, current) {
+    const explicit = progress.stall_seconds || current.stall_seconds;
+    if (progress.stalled || current.stalled) {
+      return explicit || 0;
+    }
+    if (item.status !== "running") {
+      return null;
+    }
+    const lastUpdate = current.updated_at || item.updated_at;
+    if (!lastUpdate) {
+      return null;
+    }
+    const quietFor = Math.max(0, Math.floor(Date.now() / 1000 - Number(lastUpdate)));
+    return quietFor >= 60 ? quietFor : null;
   }
 
   function titleCase(value) {

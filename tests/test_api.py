@@ -339,6 +339,15 @@ def test_run_web_constructs_uvicorn_server_and_opens_browser_on_startup(monkeypa
     assert config.app.state.queue.library_dir == tmp_path
     assert log_events == [
         (
+            "pre-launch diagnostics",
+            {
+                "HF_HUB_DISABLE_XET": None,
+                "HF_HUB_DOWNLOAD_TIMEOUT": None,
+                "HF_HUB_ETAG_TIMEOUT": None,
+                "HUGGINGFACE_PULL_MAX_WORKERS": "1",
+            },
+        ),
+        (
             "web server starting",
             {
                 "host": "0.0.0.0",

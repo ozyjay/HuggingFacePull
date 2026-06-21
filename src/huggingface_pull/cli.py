@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import webbrowser
 from pathlib import Path
@@ -9,7 +10,7 @@ import uvicorn
 
 from .api import create_app
 from .app_logging import write_log
-from .config import DEFAULT_ENDPOINT, default_library_dir
+from .config import DEFAULT_ENDPOINT, default_library_dir, default_max_workers
 from .hub import HubRef, cleanup_library, pull_snapshot
 
 
@@ -31,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ignore", action="append", default=[], help="Glob pattern to exclude.")
     parser.add_argument("--library-dir", type=Path, default=default_library_dir())
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument("--max-workers", type=int, default=default_max_workers())
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -68,6 +70,19 @@ def _log(message: str, /, **fields: object) -> None:
         write_log(message, **fields)
     except Exception:
         pass
+
+
+def _log_pre_launch_diagnostics() -> None:
+    _log(
+        "pre-launch diagnostics",
+        HF_HUB_DISABLE_XET=os.environ.get("HF_HUB_DISABLE_XET"),
+        HF_HUB_DOWNLOAD_TIMEOUT=os.environ.get("HF_HUB_DOWNLOAD_TIMEOUT"),
+        HF_HUB_ETAG_TIMEOUT=os.environ.get("HF_HUB_ETAG_TIMEOUT"),
+        HUGGINGFACE_PULL_MAX_WORKERS=os.environ.get(
+            "HUGGINGFACE_PULL_MAX_WORKERS",
+            str(default_max_workers()),
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -108,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             library_dir=args.library_dir.expanduser(),
             endpoint=args.endpoint,
             dry_run=args.dry_run,
+            max_workers=args.max_workers,
         )
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
@@ -118,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def run_web(argv: list[str] | None = None) -> int:
     args = build_web_parser().parse_args(argv)
+    _log_pre_launch_diagnostics()
     app = create_app(library_dir=args.library_dir.expanduser())
     browser_url = _browser_url(args.host, args.port)
     _log(

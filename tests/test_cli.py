@@ -14,6 +14,8 @@ def test_parser_accepts_repo_revision_and_filters():
             "*.bin",
             "--repo-type",
             "model",
+            "--max-workers",
+            "2",
         ]
     )
 
@@ -22,6 +24,7 @@ def test_parser_accepts_repo_revision_and_filters():
     assert args.allow == ["*.safetensors"]
     assert args.ignore == ["*.bin"]
     assert args.repo_type == "model"
+    assert args.max_workers == 2
 
 
 def test_run_web_without_args_starts_server(monkeypatch):
@@ -45,17 +48,46 @@ def test_run_web_without_args_starts_server(monkeypatch):
     assert opened == ["http://127.0.0.1:8019/"]
 
 
+def test_run_web_logs_pre_launch_hf_diagnostics(monkeypatch, tmp_path):
+    log_events = []
+    monkeypatch.setenv("HF_HUB_DISABLE_XET", "1")
+    monkeypatch.setenv("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+    monkeypatch.setenv("HF_HUB_ETAG_TIMEOUT", "30")
+    monkeypatch.setenv("HUGGINGFACE_PULL_MAX_WORKERS", "3")
+    monkeypatch.setattr(cli, "write_log", lambda message, **fields: log_events.append((message, fields)))
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            pass
+
+    monkeypatch.setattr(cli.uvicorn, "Server", FakeServer)
+
+    assert cli.run_web(["--library-dir", str(tmp_path)]) == 0
+    assert (
+        "pre-launch diagnostics",
+        {
+            "HF_HUB_DISABLE_XET": "1",
+            "HF_HUB_DOWNLOAD_TIMEOUT": "120",
+            "HF_HUB_ETAG_TIMEOUT": "30",
+            "HUGGINGFACE_PULL_MAX_WORKERS": "3",
+        },
+    ) in log_events
+
+
 def test_main_calls_pull_snapshot(monkeypatch, tmp_path):
     calls = []
 
     def fake_pull_snapshot(ref, library_dir, **kwargs):
-        calls.append((ref.repo_id, library_dir))
+        calls.append((ref.repo_id, library_dir, kwargs["max_workers"]))
         return tmp_path / "Qwen--Qwen3" / "main"
 
     monkeypatch.setattr(cli, "pull_snapshot", fake_pull_snapshot)
 
-    assert cli.main(["Qwen/Qwen3", "--library-dir", str(tmp_path)]) == 0
-    assert calls == [("Qwen/Qwen3", tmp_path)]
+    assert cli.main(["Qwen/Qwen3", "--library-dir", str(tmp_path), "--max-workers", "4"]) == 0
+    assert calls == [("Qwen/Qwen3", tmp_path, 4)]
 
 
 def test_gc_calls_cleanup(monkeypatch, tmp_path):

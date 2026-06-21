@@ -43,6 +43,16 @@ def pause_boundary_process_pull(ref, **kwargs):
     progress({"type": "file-complete", "path": "second.bin", "downloaded": 10, "total": 10})
 
 
+def max_workers_process_pull(ref, **kwargs):
+    kwargs["progress"](
+        {
+            "type": "download-progress",
+            "downloaded": kwargs["max_workers"],
+            "total": kwargs["max_workers"],
+        }
+    )
+
+
 def test_add_creates_waiting_item(tmp_path):
     queue = DownloadQueue(library_dir=tmp_path, pull_func=lambda *args, **kwargs: None)
 
@@ -308,6 +318,44 @@ def test_hard_stop_interrupts_blocked_process_download(tmp_path):
     assert snapshot["stop_after_file_requested"] is False
 
 
+def test_process_download_passes_max_workers_to_pull_func(tmp_path):
+    queue = DownloadQueue(
+        library_dir=tmp_path,
+        pull_func=max_workers_process_pull,
+        hard_stop_downloads=True,
+        max_workers=5,
+    )
+    queue.add({"repo_id": "Qwen/Qwen3"})
+    queue.start()
+
+    assert queue.wait_until_idle(3)
+    assert queue.snapshot()["items"][0]["progress"]["overall"]["downloaded"] == 5
+    assert queue.snapshot()["items"][0]["status"] == "completed"
+
+
+def test_stall_watchdog_terminates_child_process_and_reports_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(queue_module, "PROCESS_EVENT_POLL_SECONDS", 0.01)
+    monkeypatch.setenv("HUGGINGFACE_PULL_STALL_TIMEOUT_SECONDS", "1")
+
+    queue = DownloadQueue(
+        library_dir=tmp_path,
+        pull_func=blocked_process_pull,
+        hard_stop_downloads=True,
+    )
+    queue.add({"repo_id": "Qwen/Qwen2.5-1.5B-Instruct"})
+    queue.start()
+
+    assert queue.wait_until_idle(4)
+    [item] = queue.snapshot()["items"]
+    assert item["status"] == "failed"
+    assert item["progress"]["phase"] == "failed"
+    assert "Qwen/Qwen2.5-1.5B-Instruct" in item["error"]
+    assert "snapshot" in item["error"]
+    assert "downloaded_bytes=11534336" in item["error"]
+    assert "retry" in item["error"].lower()
+    assert "stalled" in item["messages"][-1]["text"]
+
+
 def test_stop_after_file_keeps_model_complete_item_completed_for_current_hub_semantics(
     tmp_path,
 ):
@@ -552,6 +600,7 @@ def test_progress_tracks_manifest_model_plan_file_progress_and_model_complete(tm
         "bytes_per_second": 8.0,
         "eta_seconds": 1,
         "line": "50.0% 2B/4B 8B/s eta 0m01s",
+        "updated_at": mock.ANY,
     }
 
     queue._record_progress(
@@ -576,6 +625,34 @@ def test_progress_tracks_manifest_model_plan_file_progress_and_model_complete(tm
         "file-complete",
         "model-complete",
     ]
+
+
+def test_snapshot_marks_running_item_stalled_after_quiet_progress(tmp_path):
+    queue = DownloadQueue(library_dir=tmp_path, pull_func=lambda *args, **kwargs: None)
+    item = queue.add({"repo_id": "Qwen/Qwen3"})
+    queue._record_progress(
+        item["id"],
+        {
+            "type": "file-progress",
+            "path": "weights.safetensors",
+            "downloaded": 2,
+            "total": 10,
+            "percent": 20.0,
+        },
+    )
+
+    with queue._condition:
+        queue._items[0]["status"] = "running"
+        queue._items[0]["updated_at"] = time.time() - queue_module.STALLED_PROGRESS_SECONDS - 1
+        queue._items[0]["progress"]["current_file"]["updated_at"] = queue._items[0]["updated_at"]
+
+    snapshot = queue.snapshot()
+    progress = snapshot["items"][0]["progress"]
+
+    assert progress["stalled"] is True
+    assert progress["stall_seconds"] >= queue_module.STALLED_PROGRESS_SECONDS
+    assert progress["current_file"]["stalled"] is True
+    assert progress["current_file"]["stall_seconds"] >= queue_module.STALLED_PROGRESS_SECONDS
 
 
 def test_progress_tracks_aggregate_download_progress(tmp_path):
@@ -612,6 +689,7 @@ def test_progress_tracks_aggregate_download_progress(tmp_path):
             "percent": 25.0,
             "bytes_per_second": 10.0,
             "eta_seconds": 2,
+            "updated_at": mock.ANY,
         },
     }
     assert queue.snapshot()["items"][0]["messages"] == []

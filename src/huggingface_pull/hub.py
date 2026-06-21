@@ -9,18 +9,21 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from huggingface_hub import HfApi, hf_hub_download
-from huggingface_hub.constants import HF_HUB_CACHE
-from huggingface_hub.utils import tqdm as hf_tqdm
-
 from .app_logging import write_log
-from .config import DEFAULT_ENDPOINT, safe_repo_dir_name
+from .config import DEFAULT_ENDPOINT, default_max_workers, safe_repo_dir_name
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 StopAfterFileCallback = Callable[[], bool]
 PROGRESS_EMIT_INTERVAL_SECONDS = 0.5
 _LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
+HF_HUB_CACHE = os.environ.get(
+    "HF_HUB_CACHE",
+    str(Path.home() / ".cache" / "huggingface" / "hub"),
+)
+HfApi: Any | None = None
+snapshot_download: Any | None = None
+hf_tqdm: Any | None = None
 
 
 class DownloadStoppedAfterFile(Exception):
@@ -71,7 +74,7 @@ def search_models(
         return {"available": True, "results": [], "error": None}
 
     try:
-        api = HfApi(endpoint=endpoint)
+        api = _hf_api_class()(endpoint=endpoint)
         models = api.list_models(
             search=query,
             limit=20,
@@ -102,7 +105,7 @@ def repo_files(
     if ref.repo_type != "model":
         raise NotImplementedError("Only model repository files are supported for now.")
 
-    api = HfApi(endpoint=endpoint)
+    api = _hf_api_class()(endpoint=endpoint)
     info = api.model_info(
         ref.repo_id,
         revision=ref.revision,
@@ -442,6 +445,7 @@ def pull_snapshot(
     dry_run: bool = False,
     progress: ProgressCallback | None = None,
     stop_after_file: StopAfterFileCallback | None = None,
+    max_workers: int | None = None,
 ) -> Path:
     target = metadata_path(library_dir, ref).parent
     if progress is not None:
@@ -455,7 +459,7 @@ def pull_snapshot(
     previous_disable_xet = os.environ.get("HF_HUB_DISABLE_XET")
     os.environ["HF_HUB_DISABLE_XET"] = "1"
     try:
-        api = HfApi(endpoint=endpoint)
+        api = _hf_api_class()(endpoint=endpoint)
         info = api.model_info(
             ref.repo_id,
             revision=ref.revision,
@@ -485,49 +489,24 @@ def pull_snapshot(
                 }
             )
         target.mkdir(parents=True, exist_ok=True)
-        for file in files:
-            path = str(file["path"])
-            size = file.get("size")
-            blob_id = file.get("blob_id")
-            if progress is not None:
-                progress(
-                    {
-                        "type": "file-start",
-                        "repo_id": ref.repo_id,
-                        "path": path,
-                        "size": size,
-                        "blob_id": blob_id,
-                        "resume_at": _local_file_size(target / path),
-                    }
-                )
-            hf_hub_download(
+        snapshot_path = Path(
+            _snapshot_download_func()(
                 repo_id=ref.repo_id,
-                filename=path,
                 revision=ref.revision,
                 repo_type=None if ref.repo_type == "model" else ref.repo_type,
                 local_dir=target,
                 endpoint=endpoint,
                 token=token,
-                tqdm_class=_file_progress_tqdm_class(ref.repo_id, file, progress)
+                allow_patterns=list(ref.allow_patterns) or None,
+                ignore_patterns=list(ref.ignore_patterns) or None,
+                max_workers=max_workers if max_workers is not None else default_max_workers(),
+                tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
                 if progress is not None
                 else None,
             )
-            downloaded = _local_file_size(target / path)
-            if progress is not None:
-                progress(
-                    {
-                        "type": "file-complete",
-                        "repo_id": ref.repo_id,
-                        "path": path,
-                        "downloaded": downloaded,
-                        "total": size,
-                        "percent": 100.0 if size else None,
-                        "blob_id": blob_id,
-                    }
-                )
-            if stop_after_file is not None and stop_after_file():
-                raise DownloadStoppedAfterFile
-        snapshot_path = target
+        )
+        if stop_after_file is not None and stop_after_file():
+            raise DownloadStoppedAfterFile
     finally:
         if previous_disable_xet is None:
             os.environ.pop("HF_HUB_DISABLE_XET", None)
@@ -590,11 +569,36 @@ def _local_file_size(path: Path) -> int:
         return 0
 
 
+def _hf_api_class() -> Any:
+    if HfApi is not None:
+        return HfApi
+    from huggingface_hub import HfApi as imported_hf_api
+
+    return imported_hf_api
+
+
+def _snapshot_download_func() -> Any:
+    if snapshot_download is not None:
+        return snapshot_download
+    from huggingface_hub import snapshot_download as imported_snapshot_download
+
+    return imported_snapshot_download
+
+
+def _hf_tqdm_class() -> Any:
+    global hf_tqdm
+    if hf_tqdm is None:
+        from huggingface_hub.utils import tqdm as imported_hf_tqdm
+
+        hf_tqdm = imported_hf_tqdm
+    return hf_tqdm
+
+
 def _file_progress_tqdm_class(
     repo_id: str,
     file: dict[str, Any],
     progress: ProgressCallback,
-) -> type[hf_tqdm]:
+) -> Any:
     path = str(file["path"])
     blob_id = file.get("blob_id")
     size = file.get("size")
@@ -654,8 +658,8 @@ def _progress_tqdm_class(
     repo_id: str,
     progress: ProgressCallback,
     stop_after_file: StopAfterFileCallback | None = None,
-) -> type[hf_tqdm]:
-    class ProgressTqdm(hf_tqdm):
+) -> Any:
+    class ProgressTqdm(_hf_tqdm_class()):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self._hfp_ready = False
             self._hfp_last_emit_at: float | None = None
