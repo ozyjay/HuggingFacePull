@@ -150,6 +150,33 @@ struct HuggingFacePullMacCoreTests {
             Issue.record("Unexpected error: \(error)")
         }
     }
+
+    @Test("backend launch environment disables Hugging Face Xet")
+    func backendLaunchEnvironmentDisablesXet() throws {
+        let configuration = BackendLaunchConfiguration(
+            repositoryRoot: URL(fileURLWithPath: "/tmp/HuggingFacePull")
+        )
+        let environment = BackendProcessManager.launchEnvironment(
+            configuration: configuration,
+            baseEnvironment: [:]
+        )
+
+        #expect(environment["HF_HUB_DISABLE_XET"] == "1")
+        #expect(environment["PYTHONPATH"] == "/tmp/HuggingFacePull/src")
+    }
+
+    @Test("backend launch environment overrides inherited Xet setting")
+    func backendLaunchEnvironmentOverridesInheritedXetSetting() throws {
+        let configuration = BackendLaunchConfiguration(
+            repositoryRoot: URL(fileURLWithPath: "/tmp/HuggingFacePull")
+        )
+        let environment = BackendProcessManager.launchEnvironment(
+            configuration: configuration,
+            baseEnvironment: ["HF_HUB_DISABLE_XET": "0"]
+        )
+
+        #expect(environment["HF_HUB_DISABLE_XET"] == "1")
+    }
 }
 
 private final class MockURLProtocol: URLProtocol, @unchecked Sendable {

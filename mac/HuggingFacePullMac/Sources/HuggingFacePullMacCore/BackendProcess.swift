@@ -32,6 +32,21 @@ public final class BackendProcessManager: ObservableObject {
 
     public init() {}
 
+    nonisolated public static func launchEnvironment(
+        configuration: BackendLaunchConfiguration,
+        baseEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = baseEnvironment
+        environment["HF_HUB_DISABLE_XET"] = "1"
+        let sourcePath = configuration.repositoryRoot.appendingPathComponent("src").path
+        if let existing = environment["PYTHONPATH"], !existing.isEmpty {
+            environment["PYTHONPATH"] = "\(sourcePath):\(existing)"
+        } else {
+            environment["PYTHONPATH"] = sourcePath
+        }
+        return environment
+    }
+
     public func start(configuration: BackendLaunchConfiguration) {
         guard process == nil else {
             return
@@ -40,14 +55,7 @@ public final class BackendProcessManager: ObservableObject {
         let process = Process()
         process.currentDirectoryURL = configuration.repositoryRoot
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        var environment = ProcessInfo.processInfo.environment
-        let sourcePath = configuration.repositoryRoot.appendingPathComponent("src").path
-        if let existing = environment["PYTHONPATH"], !existing.isEmpty {
-            environment["PYTHONPATH"] = "\(sourcePath):\(existing)"
-        } else {
-            environment["PYTHONPATH"] = sourcePath
-        }
-        process.environment = environment
+        process.environment = Self.launchEnvironment(configuration: configuration)
         process.arguments = [
             configuration.pythonExecutable,
             "-m",

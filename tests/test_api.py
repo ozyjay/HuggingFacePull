@@ -368,7 +368,7 @@ def test_run_web_constructs_uvicorn_server_and_opens_browser_on_startup(monkeypa
         (
             "pre-launch diagnostics",
             {
-                "HF_HUB_DISABLE_XET": None,
+                "HF_HUB_DISABLE_XET": "1",
                 "HF_HUB_DOWNLOAD_TIMEOUT": None,
                 "HF_HUB_ETAG_TIMEOUT": None,
                 "HUGGINGFACE_PULL_MAX_WORKERS": "1",

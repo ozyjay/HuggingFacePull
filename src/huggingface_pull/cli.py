@@ -90,6 +90,10 @@ def _log_pre_launch_diagnostics() -> None:
     )
 
 
+def _ensure_standard_hub_download() -> None:
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["gc"]:
@@ -139,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def run_web(argv: list[str] | None = None) -> int:
     args = build_web_parser().parse_args(argv)
+    _ensure_standard_hub_download()
     _log_pre_launch_diagnostics()
     app = create_app(library_dir=args.library_dir.expanduser())
     browser_url = _browser_url(args.host, args.port)

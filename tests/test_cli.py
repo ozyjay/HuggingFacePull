@@ -98,6 +98,44 @@ def test_run_web_logs_pre_launch_hf_diagnostics(monkeypatch, tmp_path):
     ) in log_events
 
 
+def test_run_web_defaults_to_disabling_xet_before_launch(monkeypatch, tmp_path):
+    captured_environment = {}
+    monkeypatch.delenv("HF_HUB_DISABLE_XET", raising=False)
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            captured_environment["HF_HUB_DISABLE_XET"] = cli.os.environ.get(
+                "HF_HUB_DISABLE_XET"
+            )
+
+    monkeypatch.setattr(cli.uvicorn, "Server", FakeServer)
+
+    assert cli.run_web(["--library-dir", str(tmp_path), "--no-browser"]) == 0
+    assert captured_environment["HF_HUB_DISABLE_XET"] == "1"
+
+
+def test_run_web_overrides_existing_xet_setting(monkeypatch, tmp_path):
+    captured_environment = {}
+    monkeypatch.setenv("HF_HUB_DISABLE_XET", "0")
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            captured_environment["HF_HUB_DISABLE_XET"] = cli.os.environ.get(
+                "HF_HUB_DISABLE_XET"
+            )
+
+    monkeypatch.setattr(cli.uvicorn, "Server", FakeServer)
+
+    assert cli.run_web(["--library-dir", str(tmp_path), "--no-browser"]) == 0
+    assert captured_environment["HF_HUB_DISABLE_XET"] == "1"
+
+
 def test_main_calls_pull_snapshot(monkeypatch, tmp_path):
     calls = []
 
