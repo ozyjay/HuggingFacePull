@@ -74,7 +74,7 @@ def test_queue_endpoint_rejects_installed_snapshot(tmp_path):
     assert response.json()["detail"] == "Snapshot is already installed"
 
 
-def test_queue_endpoint_rejects_cached_hub_model(monkeypatch, tmp_path):
+def test_queue_endpoint_allows_cached_hub_model_so_partial_cache_can_resume(monkeypatch, tmp_path):
     import huggingface_pull.api as api_module
 
     monkeypatch.setattr(api_module, "installed_models", lambda library_dir: [])
@@ -87,8 +87,8 @@ def test_queue_endpoint_rejects_cached_hub_model(monkeypatch, tmp_path):
 
     response = client.post("/api/queue", json={"repo_id": "Qwen/Qwen2.5-0.5B"})
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Model is already available in the Hugging Face cache"
+    assert response.status_code == 200
+    assert response.json()["repo_id"] == "Qwen/Qwen2.5-0.5B"
 
 
 def test_bad_queue_body_returns_422(tmp_path):
@@ -164,7 +164,16 @@ def test_start_pause_and_stop_endpoints_delegate_to_queue(monkeypatch, tmp_path)
             self.calls = []
 
         def snapshot(self):
-            return {"library_dir": str(self.library_dir), "calls": list(self.calls), "items": []}
+            return {
+                "running": False,
+                "pause_requested": False,
+                "stop_after_file_requested": False,
+                "library_dir": str(self.library_dir),
+                "endpoint": "https://huggingface.co",
+                "installed_models": [],
+                "calls": list(self.calls),
+                "items": [],
+            }
 
         def start(self):
             self.calls.append("start")
@@ -177,16 +186,30 @@ def test_start_pause_and_stop_endpoints_delegate_to_queue(monkeypatch, tmp_path)
             return self.snapshot()
 
     monkeypatch.setattr(api_module, "DownloadQueue", FakeQueue)
+    monkeypatch.setattr(
+        api_module,
+        "cached_hub_models",
+        lambda: [{"repo_id": "Cached/Model", "revision": "main", "repo_type": "model"}],
+    )
     app = create_app(library_dir=tmp_path)
     client = TestClient(app)
 
-    assert client.post("/api/start").json()["calls"] == ["start"]
-    assert client.post("/api/pause").json()["calls"] == ["start", "pause"]
-    assert client.post("/api/stop-after-file").json()["calls"] == [
+    started = client.post("/api/start").json()
+    paused = client.post("/api/pause").json()
+    stopped = client.post("/api/stop-after-file").json()
+
+    assert started["calls"] == ["start"]
+    assert paused["calls"] == ["start", "pause"]
+    assert stopped["calls"] == [
         "start",
         "pause",
         "stop",
     ]
+    assert started["cached_models"] == [
+        {"repo_id": "Cached/Model", "revision": "main", "repo_type": "model"}
+    ]
+    assert paused["cached_models"] == started["cached_models"]
+    assert stopped["cached_models"] == started["cached_models"]
     assert app.state.queue.calls == ["start", "pause", "stop"]
 
 

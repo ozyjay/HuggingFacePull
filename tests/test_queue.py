@@ -695,6 +695,42 @@ def test_progress_tracks_aggregate_download_progress(tmp_path):
     assert queue.snapshot()["items"][0]["messages"] == []
 
 
+def test_progress_heartbeat_refreshes_activity_without_changing_byte_totals(tmp_path):
+    queue = DownloadQueue(library_dir=tmp_path, pull_func=lambda *args, **kwargs: None)
+    item = queue.add({"repo_id": "Qwen/Qwen3"})
+    queue._record_progress(
+        item["id"],
+        {
+            "type": "model-plan",
+            "total_bytes": 20,
+            "files": [{"path": "weights.bin", "size": 20}],
+        },
+    )
+
+    before = queue.snapshot()["items"][0]["updated_at"]
+    queue._record_progress(
+        item["id"],
+        {
+            "type": "download-heartbeat",
+            "repo_id": "Qwen/Qwen3",
+            "phase": "fetching",
+            "description": "Fetching 1 files",
+            "completed": 0,
+            "total": 1,
+            "unit": "files",
+        },
+    )
+
+    snapshot_item = queue.snapshot()["items"][0]
+    assert snapshot_item["updated_at"] >= before
+    assert snapshot_item["progress"] == {
+        "phase": "fetching",
+        "overall": {"downloaded": 0, "total": 20, "percent": None},
+        "current_file": None,
+    }
+    assert [message["text"] for message in snapshot_item["messages"]] == ["model-plan"]
+
+
 def test_concurrent_start_calls_reserve_single_worker_slot(tmp_path):
     active = 0
     max_active = 0

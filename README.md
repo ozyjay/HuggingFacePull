@@ -18,6 +18,17 @@ This project expects `python3` from the active `pyenv` version.
 
 The web UI binds to `127.0.0.1:8019` by default and opens the local browser.
 
+## Run the Mac SwiftUI App
+
+```bash
+cd mac/HuggingFacePullMac
+swift run HuggingFacePullMac
+```
+
+The native Mac app starts the local FastAPI backend without opening a browser, then connects to
+`http://127.0.0.1:8019`. It uses the same search, queue, installed snapshot, and cleanup APIs as
+the web UI.
+
 ## Pull a Repo
 
 ```bash

@@ -48,6 +48,27 @@ def test_run_web_without_args_starts_server(monkeypatch):
     assert opened == ["http://127.0.0.1:8019/"]
 
 
+def test_run_web_no_browser_starts_server_without_opening_browser(monkeypatch):
+    opened = []
+    ran = []
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            for handler in self.config.app.router.on_startup:
+                handler()
+            ran.append(True)
+
+    monkeypatch.setattr(cli.webbrowser, "open", opened.append)
+    monkeypatch.setattr(cli.uvicorn, "Server", FakeServer)
+
+    assert cli.run_web(["--no-browser"]) == 0
+    assert ran == [True]
+    assert opened == []
+
+
 def test_run_web_logs_pre_launch_hf_diagnostics(monkeypatch, tmp_path):
     log_events = []
     monkeypatch.setenv("HF_HUB_DISABLE_XET", "1")

@@ -5,6 +5,7 @@ import fnmatch
 import json
 import os
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -16,13 +17,14 @@ from .config import DEFAULT_ENDPOINT, default_max_workers, safe_repo_dir_name
 ProgressCallback = Callable[[dict[str, Any]], None]
 StopAfterFileCallback = Callable[[], bool]
 PROGRESS_EMIT_INTERVAL_SECONDS = 0.5
+INCOMPLETE_PROGRESS_POLL_SECONDS = 0.5
 _LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
 HF_HUB_CACHE = os.environ.get(
     "HF_HUB_CACHE",
     str(Path.home() / ".cache" / "huggingface" / "hub"),
 )
 HfApi: Any | None = None
-snapshot_download: Any | None = None
+hf_hub_download: Any | None = None
 hf_tqdm: Any | None = None
 
 
@@ -196,6 +198,7 @@ def _cache_snapshot_skip_reason(snapshot: Path) -> dict[str, Any] | None:
         return {"reason": "missing"}
 
     found_file = False
+    found_weight_file = False
     for path in snapshot.rglob("*"):
         if path.is_dir():
             continue
@@ -208,8 +211,12 @@ def _cache_snapshot_skip_reason(snapshot: Path) -> dict[str, Any] | None:
             }
         if path.is_file():
             found_file = True
+            if _is_model_weight_file(path):
+                found_weight_file = True
     if not found_file:
         return {"reason": "empty"}
+    if not found_weight_file:
+        return {"reason": "missing_weight_file"}
     return None
 
 
@@ -278,6 +285,20 @@ def remove_installed_model(library_dir: Path, ref: HubRef) -> None:
 
 def _is_partial_file(path: Path) -> bool:
     return ".incomplete" in path.name or ".tmp" in path.name
+
+
+def _is_model_weight_file(path: Path) -> bool:
+    return path.name.endswith((
+        ".safetensors",
+        ".bin",
+        ".gguf",
+        ".pt",
+        ".pth",
+        ".ckpt",
+        ".onnx",
+        ".mlx",
+        ".npz",
+    ))
 
 
 def _partial_scan_roots(library_dir: Path) -> list[tuple[Path, str]]:
@@ -489,24 +510,14 @@ def pull_snapshot(
                     "files": files,
                 }
             )
-        snapshot_path = Path(
-            _snapshot_download_func()(
-                repo_id=ref.repo_id,
-                revision=ref.revision,
-                repo_type=None if ref.repo_type == "model" else ref.repo_type,
-                cache_dir=Path(HF_HUB_CACHE),
-                endpoint=endpoint,
-                token=token,
-                allow_patterns=list(ref.allow_patterns) or None,
-                ignore_patterns=list(ref.ignore_patterns) or None,
-                max_workers=max_workers if max_workers is not None else default_max_workers(),
-                tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
-                if progress is not None
-                else None,
-            )
+        snapshot_path = _download_filtered_files(
+            ref,
+            files,
+            endpoint=endpoint,
+            token=token,
+            progress=progress,
+            stop_after_file=stop_after_file,
         )
-        if stop_after_file is not None and stop_after_file():
-            raise DownloadStoppedAfterFile
     finally:
         if previous_disable_xet is None:
             os.environ.pop("HF_HUB_DISABLE_XET", None)
@@ -576,12 +587,170 @@ def _hf_api_class() -> Any:
     return imported_hf_api
 
 
-def _snapshot_download_func() -> Any:
-    if snapshot_download is not None:
-        return snapshot_download
-    from huggingface_hub import snapshot_download as imported_snapshot_download
+def _hf_hub_download_func() -> Any:
+    if hf_hub_download is not None:
+        return hf_hub_download
+    from huggingface_hub import hf_hub_download as imported_hf_hub_download
 
-    return imported_snapshot_download
+    return imported_hf_hub_download
+
+
+def _download_filtered_files(
+    ref: HubRef,
+    files: list[dict[str, Any]],
+    *,
+    endpoint: str,
+    token: str | None,
+    progress: ProgressCallback | None,
+    stop_after_file: StopAfterFileCallback | None,
+) -> Path:
+    snapshot_path: Path | None = None
+    for file in files:
+        filename = str(file["path"])
+        total = file.get("size")
+        blob_id = file.get("blob_id")
+        if progress is not None:
+            progress(
+                {
+                    "type": "file-start",
+                    "repo_id": ref.repo_id,
+                    "path": filename,
+                    "total": total,
+                    "blob_id": blob_id,
+                    "resume_at": 0,
+                }
+            )
+        cache_dir = Path(HF_HUB_CACHE)
+        downloaded_path = Path(
+            _download_file_with_progress_fallback(
+                ref,
+                file,
+                cache_dir=cache_dir,
+                endpoint=endpoint,
+                token=token,
+                progress=progress,
+            )
+        )
+        snapshot_path = _snapshot_path_from_downloaded_file(downloaded_path, filename)
+        downloaded = _local_file_size(downloaded_path)
+        if progress is not None:
+            progress(
+                {
+                    "type": "file-complete",
+                    "repo_id": ref.repo_id,
+                    "path": filename,
+                    "downloaded": downloaded,
+                    "total": total if isinstance(total, int) else downloaded,
+                    "blob_id": blob_id,
+                }
+            )
+        if stop_after_file is not None and stop_after_file():
+            raise DownloadStoppedAfterFile
+
+    return snapshot_path or metadata_path(Path(HF_HUB_CACHE), ref).parent
+
+
+def _download_file_with_progress_fallback(
+    ref: HubRef,
+    file: dict[str, Any],
+    *,
+    cache_dir: Path,
+    endpoint: str,
+    token: str | None,
+    progress: ProgressCallback | None,
+) -> str:
+    stop_monitor = threading.Event()
+    monitor: threading.Thread | None = None
+    if progress is not None:
+        monitor = threading.Thread(
+            target=_monitor_incomplete_file_progress,
+            args=(ref, file, cache_dir, progress, stop_monitor),
+            daemon=True,
+        )
+        monitor.start()
+    try:
+        return _hf_hub_download_func()(
+            repo_id=ref.repo_id,
+            filename=str(file["path"]),
+            revision=ref.revision,
+            repo_type=None if ref.repo_type == "model" else ref.repo_type,
+            cache_dir=cache_dir,
+            endpoint=endpoint,
+            token=token,
+            tqdm_class=_file_progress_tqdm_class(ref.repo_id, file, progress)
+            if progress is not None
+            else None,
+        )
+    finally:
+        stop_monitor.set()
+        if monitor is not None:
+            monitor.join(timeout=INCOMPLETE_PROGRESS_POLL_SECONDS * 2)
+
+
+def _monitor_incomplete_file_progress(
+    ref: HubRef,
+    file: dict[str, Any],
+    cache_dir: Path,
+    progress: ProgressCallback,
+    stop_monitor: threading.Event,
+) -> None:
+    repo_cache = _repo_cache_dir(cache_dir, ref)
+    path = str(file["path"])
+    total = file.get("size")
+    blob_id = file.get("blob_id")
+    last_size: int | None = None
+    while not stop_monitor.wait(INCOMPLETE_PROGRESS_POLL_SECONDS):
+        partial = _active_incomplete_file(repo_cache)
+        if partial is None:
+            continue
+        try:
+            downloaded = partial.stat().st_size
+        except FileNotFoundError:
+            continue
+        if downloaded == last_size:
+            continue
+        last_size = downloaded
+        progress(
+            {
+                "type": "file-progress",
+                "repo_id": ref.repo_id,
+                "path": path,
+                "downloaded": downloaded,
+                "total": total,
+                "percent": downloaded / total * 100
+                if isinstance(total, int) and total > 0
+                else None,
+                "bytes_per_second": None,
+                "eta_seconds": None,
+                "blob_id": blob_id,
+            }
+        )
+
+
+def _active_incomplete_file(repo_cache: Path) -> Path | None:
+    blobs = repo_cache / "blobs"
+    if not blobs.is_dir():
+        return None
+    candidates = [
+        path
+        for path in blobs.iterdir()
+        if path.is_file() and _is_partial_file(path)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _repo_cache_dir(cache_dir: Path, ref: HubRef) -> Path:
+    prefix = "models" if ref.repo_type == "model" else f"{ref.repo_type}s"
+    return Path(cache_dir) / f"{prefix}--{ref.repo_id.replace('/', '--')}"
+
+
+def _snapshot_path_from_downloaded_file(downloaded_path: Path, filename: str) -> Path:
+    snapshot_path = downloaded_path
+    for _ in Path(filename).parts:
+        snapshot_path = snapshot_path.parent
+    return snapshot_path
 
 
 def _hf_tqdm_class() -> Any:
@@ -606,6 +775,7 @@ def _file_progress_tqdm_class(
     class FileProgressTqdm(base_class):
         def _emit_download_progress(self, *, force: bool = False) -> None:
             if getattr(self, "unit", None) != "B":
+                self._emit_download_heartbeat(force=force)
                 return
             downloaded = _numeric_progress_value(getattr(self, "n", None))
             total = _numeric_progress_value(getattr(self, "total", None))
@@ -691,6 +861,7 @@ def _progress_tqdm_class(
 
         def _emit_download_progress(self, *, force: bool = False) -> None:
             if getattr(self, "unit", None) != "B":
+                self._emit_download_heartbeat(force=force)
                 return
             downloaded = _numeric_progress_value(getattr(self, "n", None))
             total = _numeric_progress_value(getattr(self, "total", None))
@@ -726,6 +897,37 @@ def _progress_tqdm_class(
                     "percent": percent,
                     "bytes_per_second": speed,
                     "eta_seconds": eta,
+                }
+            )
+            self._hfp_last_emit_at = now
+            self._hfp_last_signature = signature
+
+        def _emit_download_heartbeat(self, *, force: bool = False) -> None:
+            completed = _numeric_progress_value(getattr(self, "n", None))
+            total = _numeric_progress_value(getattr(self, "total", None))
+            description = str(getattr(self, "desc", "") or "").strip()
+            unit = str(getattr(self, "unit", "") or "").strip() or None
+            signature = (completed, total)
+            if signature == getattr(self, "_hfp_last_signature", None):
+                return
+            now = time.monotonic()
+            last_emit_at = getattr(self, "_hfp_last_emit_at", None)
+            if (
+                not force
+                and last_emit_at is not None
+                and now - last_emit_at < PROGRESS_EMIT_INTERVAL_SECONDS
+            ):
+                return
+            phase = "fetching" if "fetch" in description.lower() else "downloading"
+            progress(
+                {
+                    "type": "download-heartbeat",
+                    "repo_id": repo_id,
+                    "phase": phase,
+                    "description": description,
+                    "completed": completed,
+                    "total": total,
+                    "unit": unit,
                 }
             )
             self._hfp_last_emit_at = now

@@ -28,11 +28,14 @@ def create_app(
     app = FastAPI(title="HuggingFacePull")
     app.state.queue = queue
 
-    @app.get("/api/state")
-    def state() -> dict[str, Any]:
+    def state_payload() -> dict[str, Any]:
         snapshot = queue.snapshot()
         snapshot["cached_models"] = cached_hub_models()
         return snapshot
+
+    @app.get("/api/state")
+    def state() -> dict[str, Any]:
+        return state_payload()
 
     @app.get("/api/search")
     def search(q: str = "") -> dict[str, Any]:
@@ -65,31 +68,22 @@ def create_app(
                 and installed.get("repo_type", "model") == requested["repo_type"]
             ):
                 raise HTTPException(status_code=409, detail="Snapshot is already installed")
-        for cached in cached_hub_models():
-            if (
-                cached.get("repo_id") == requested["repo_id"]
-                and cached.get("revision", requested["revision"]) == requested["revision"]
-                and cached.get("repo_type", "model") == requested["repo_type"]
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Model is already available in the Hugging Face cache",
-                )
         return queue.add(payload.model_dump())
 
     @app.post("/api/start")
     def start() -> dict[str, Any]:
         queue.start()
-        return queue.snapshot()
+        return state_payload()
 
     @app.post("/api/pause")
     def pause() -> dict[str, Any]:
         queue.pause_after_current()
-        return queue.snapshot()
+        return state_payload()
 
     @app.post("/api/stop-after-file")
     def stop_after_file() -> dict[str, Any]:
-        return queue.stop_after_current_file()
+        queue.stop_after_current_file()
+        return state_payload()
 
     @app.post("/api/retry/{item_id}")
     def retry(item_id: str) -> dict[str, Any]:

@@ -316,7 +316,10 @@ class DownloadQueue:
             item = self._find_item(item_id)
             now = time.time()
             event_type = event.get("type")
-            if event_type is not None and event_type != "download-progress":
+            if event_type is not None and event_type not in {
+                "download-progress",
+                "download-heartbeat",
+            }:
                 self._append_message_locked(item, str(event_type))
             self._update_progress_locked(item, event, now)
             self._log_progress_event_locked(item, event)
@@ -377,6 +380,11 @@ class DownloadQueue:
                 **self._aggregate_progress_from_event(event),
                 "updated_at": updated_at,
             }
+            return
+        if event_type == "download-heartbeat":
+            phase = event.get("phase")
+            if isinstance(phase, str) and phase:
+                progress["phase"] = phase
             return
         if event_type in {"failure", "failed", "error"}:
             progress["phase"] = "failed"
