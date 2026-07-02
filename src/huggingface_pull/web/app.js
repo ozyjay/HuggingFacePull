@@ -247,7 +247,7 @@
 
     els.searchResults.innerHTML = state.searchResults.map((result) => {
       const repoId = result.repo_id || result.name || "";
-      const installed = isInstalledSnapshot(
+      const installState = snapshotInstallState(
         (state.snapshot && state.snapshot.installed_models) || [],
         (state.snapshot && state.snapshot.cached_models) || [],
         repoId,
@@ -265,9 +265,9 @@
             <strong>${escapeHtml(repoId)}</strong>
             <small>${escapeHtml(meta || "Hub repo")}</small>
           </div>
-          ${installed
+          ${installState === "installed"
             ? `<button type="button" class="secondary" disabled>Installed</button>`
-            : `<button type="button" data-add-search="${escapeAttr(repoId)}">Add</button>`}
+            : `<button type="button" data-add-search="${escapeAttr(repoId)}">${installState === "cached" ? "Add from cache" : "Add"}</button>`}
         </article>
       `;
     }).join("");
@@ -597,6 +597,10 @@
   }
 
   function isInstalledSnapshot(installed, cached, repoId, revision, repoType) {
+    return snapshotInstallState(installed, cached, repoId, revision, repoType) === "installed";
+  }
+
+  function snapshotInstallState(installed, cached, repoId, revision, repoType) {
     const expectedRevision = revision || "main";
     const expectedRepoType = repoType || "model";
     const managedMatch = (installed || []).some((item) => (
@@ -604,12 +608,15 @@
       && (item.revision || "main") === expectedRevision
       && (item.repo_type || "model") === expectedRepoType
     ));
+    if (managedMatch) {
+      return "installed";
+    }
     const cacheMatch = (cached || []).some((item) => (
       item.repo_id === repoId
-      && (item.revision || expectedRevision) === expectedRevision
+      && item.revision === expectedRevision
       && (item.repo_type || "model") === expectedRepoType
     ));
-    return managedMatch || cacheMatch;
+    return cacheMatch ? "cached" : "available";
   }
 
   function repoPath(repoId) {
@@ -735,6 +742,7 @@
     refresh,
     render,
     isInstalledSnapshot,
+    snapshotInstallState,
     downloadStatusLine,
     cleanupSummaryLine,
     queueControlState,

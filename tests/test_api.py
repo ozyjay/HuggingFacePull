@@ -74,7 +74,9 @@ def test_queue_endpoint_rejects_installed_snapshot(tmp_path):
     assert response.json()["detail"] == "Snapshot is already installed"
 
 
-def test_queue_endpoint_rejects_cached_hub_model(monkeypatch, tmp_path):
+def test_queue_endpoint_allows_cached_hub_model_without_installed_metadata(
+    monkeypatch, tmp_path
+):
     import huggingface_pull.api as api_module
 
     monkeypatch.setattr(api_module, "installed_models", lambda library_dir: [])
@@ -87,8 +89,9 @@ def test_queue_endpoint_rejects_cached_hub_model(monkeypatch, tmp_path):
 
     response = client.post("/api/queue", json={"repo_id": "Qwen/Qwen2.5-0.5B"})
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Model is already available in the Hugging Face cache"
+    assert response.status_code == 200
+    assert response.json()["repo_id"] == "Qwen/Qwen2.5-0.5B"
+    assert response.json()["status"] == "waiting"
 
 
 def test_bad_queue_body_returns_422(tmp_path):

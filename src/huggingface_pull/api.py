@@ -65,16 +65,6 @@ def create_app(
                 and installed.get("repo_type", "model") == requested["repo_type"]
             ):
                 raise HTTPException(status_code=409, detail="Snapshot is already installed")
-        for cached in cached_hub_models():
-            if (
-                cached.get("repo_id") == requested["repo_id"]
-                and cached.get("revision", requested["revision"]) == requested["revision"]
-                and cached.get("repo_type", "model") == requested["repo_type"]
-            ):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Model is already available in the Hugging Face cache",
-                )
         return queue.add(payload.model_dump())
 
     @app.post("/api/start")

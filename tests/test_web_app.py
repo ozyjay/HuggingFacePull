@@ -26,7 +26,7 @@ def test_search_install_state_matches_repo_revision_and_type():
           { repo_id: "Qwen/Qwen3", revision: "v2", repo_type: "dataset" },
         ];
         const cached = [
-          { repo_id: "Qwen/Qwen2.5-0.5B", repo_type: "model" },
+          { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model" },
         ];
 
         assert.equal(
@@ -67,7 +67,27 @@ def test_search_install_state_matches_repo_revision_and_type():
             "main",
             "model",
           ),
-          true,
+          false,
+        );
+        assert.equal(
+          context.window.HuggingFacePull.snapshotInstallState(
+            installed,
+            cached,
+            "Qwen/Qwen2.5-0.5B",
+            "main",
+            "model",
+          ),
+          "cached",
+        );
+        assert.equal(
+          context.window.HuggingFacePull.snapshotInstallState(
+            installed,
+            cached,
+            "Qwen/Qwen2.5-0.5B",
+            "v2",
+            "model",
+          ),
+          "available",
         );
         """
     )
