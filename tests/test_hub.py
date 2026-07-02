@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,8 @@ import huggingface_pull.hub as hub
 
 
 def install_fake_hub(monkeypatch, files, snapshot_func=None, endpoint="https://huggingface.co"):
+    cache_dir = Path(tempfile.mkdtemp(prefix="hfpull-test-cache-", dir="/tmp"))
+
     class FakeApi:
         def __init__(self, endpoint):
             self.endpoint = endpoint
@@ -36,6 +39,7 @@ def install_fake_hub(monkeypatch, files, snapshot_func=None, endpoint="https://h
 
     monkeypatch.setattr(hub, "HfApi", FakeApi)
     monkeypatch.setattr(hub, "snapshot_download", snapshot_func or default_snapshot_download)
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache_dir))
 
 
 def test_canonical_ref_normalises_revision_repo_type_and_filters():
@@ -82,6 +86,12 @@ def test_metadata_path_traversal_revision_cannot_escape_library(tmp_path):
 
 
 def test_installed_models_reads_metadata_skips_malformed_and_sorts(tmp_path):
+    alpha_snapshot = tmp_path / "snapshots" / "alpha"
+    zeta_snapshot = tmp_path / "snapshots" / "zeta"
+    alpha_snapshot.mkdir(parents=True)
+    zeta_snapshot.mkdir(parents=True)
+    (alpha_snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (zeta_snapshot / "config.json").write_text("{}", encoding="utf-8")
     first = tmp_path / "zeta--Repo" / "dev" / ".huggingfacepull.json"
     second = tmp_path / "Alpha--Repo" / "main" / ".huggingfacepull.json"
     malformed = tmp_path / "bad--Repo" / "main" / ".huggingfacepull.json"
@@ -94,7 +104,7 @@ def test_installed_models_reads_metadata_skips_malformed_and_sorts(tmp_path):
                 "repo_id": "zeta/Repo",
                 "revision": "dev",
                 "repo_type": "model",
-                "snapshot_path": "/tmp/zeta",
+                "snapshot_path": str(zeta_snapshot),
                 "size": 12,
             }
         )
@@ -107,7 +117,7 @@ def test_installed_models_reads_metadata_skips_malformed_and_sorts(tmp_path):
                 "repo_id": "Alpha/Repo",
                 "revision": "main",
                 "repo_type": "model",
-                "snapshot_path": "/tmp/alpha",
+                "snapshot_path": str(alpha_snapshot),
                 "size": 8,
             }
         )
@@ -121,14 +131,14 @@ def test_installed_models_reads_metadata_skips_malformed_and_sorts(tmp_path):
             "repo_id": "Alpha/Repo",
             "revision": "main",
             "repo_type": "model",
-            "snapshot_path": "/tmp/alpha",
+            "snapshot_path": str(alpha_snapshot),
             "size": 8,
         },
         {
             "repo_id": "zeta/Repo",
             "revision": "dev",
             "repo_type": "model",
-            "snapshot_path": "/tmp/zeta",
+            "snapshot_path": str(zeta_snapshot),
             "size": 12,
         },
     ]
@@ -482,6 +492,7 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
         "repo_type": "model",
         "snapshot_path": str(target),
         "size": 7,
+        "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
     }
     assert sorted(path.name for path in marker.parent.iterdir()) == [".huggingfacepull.json"]
     assert events == [
@@ -494,6 +505,116 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
             "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
         },
         {"type": "model-complete", "repo_id": "Qwen/Qwen3", "snapshot_path": str(target)},
+    ]
+
+
+def test_pull_snapshot_rejects_missing_expected_file_without_metadata(
+    monkeypatch, tmp_path
+):
+    cache_dir = tmp_path / "hf-cache"
+    log_events = []
+
+    def fake_snapshot_download(**kwargs):
+        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (snapshot_dir / "config.json").write_text("{}", encoding="utf-8")
+        return str(snapshot_dir)
+
+    install_fake_hub(
+        monkeypatch,
+        [
+            {"path": "config.json", "size": 2, "blob_id": "cfg"},
+            {"path": "weights.bin", "size": 7, "blob_id": "weights"},
+        ],
+        fake_snapshot_download,
+    )
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache_dir))
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
+    ref = hub.HubRef(repo_id="Qwen/Qwen3")
+
+    with pytest.raises(RuntimeError, match="Downloaded snapshot is incomplete"):
+        hub.pull_snapshot(ref, library_dir=tmp_path)
+
+    assert not hub.metadata_path(tmp_path, ref).exists()
+    assert log_events == [
+        (
+            "downloaded snapshot incomplete",
+            {
+                "repo_id": "Qwen/Qwen3",
+                "revision": "main",
+                "snapshot_path": cache_dir / "models--Qwen--Qwen3" / "snapshots" / "abc123",
+                "reason": "missing_file",
+                "path": cache_dir / "models--Qwen--Qwen3" / "snapshots" / "abc123" / "weights.bin",
+            },
+        )
+    ]
+
+
+def test_pull_snapshot_rejects_size_mismatch_without_metadata(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "hf-cache"
+
+    def fake_snapshot_download(**kwargs):
+        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        (snapshot_dir / "weights.bin").write_bytes(b"short")
+        return str(snapshot_dir)
+
+    install_fake_hub(
+        monkeypatch,
+        [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
+        fake_snapshot_download,
+    )
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache_dir))
+    ref = hub.HubRef(repo_id="Qwen/Qwen3")
+
+    with pytest.raises(RuntimeError, match="size_mismatch"):
+        hub.pull_snapshot(ref, library_dir=tmp_path)
+
+    assert not hub.metadata_path(tmp_path, ref).exists()
+
+
+def test_installed_models_skips_metadata_for_incomplete_snapshot(tmp_path, monkeypatch):
+    log_events = []
+    snapshot = tmp_path / "hf-cache" / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    marker = tmp_path / "library" / "Qwen--Qwen3" / "main" / ".huggingfacepull.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "repo_id": "Qwen/Qwen3",
+                "revision": "main",
+                "repo_type": "model",
+                "snapshot_path": str(snapshot),
+                "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
+
+    assert hub.installed_models(tmp_path / "library") == []
+    assert log_events == [
+        (
+            "installed metadata skipped",
+            {
+                "marker": marker,
+                "repo_id": "Qwen/Qwen3",
+                "revision": "main",
+                "reason": "empty",
+            },
+        )
     ]
 
 
@@ -588,7 +709,7 @@ def test_pull_snapshot_emits_aggregate_byte_progress_from_snapshot_tqdm(monkeypa
 
     install_fake_hub(
         monkeypatch,
-        [{"path": "weights.bin", "size": 15, "blob_id": "weights"}],
+        [{"path": "weights.bin", "size": 3, "blob_id": "weights"}],
         fake_snapshot_download,
     )
     events = []
@@ -648,7 +769,7 @@ def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
 
     install_fake_hub(
         monkeypatch,
-        [{"path": "weights.bin", "size": 100, "blob_id": "weights"}],
+        [{"path": "weights.bin", "size": 40, "blob_id": "weights"}],
         fake_snapshot_download,
     )
     events = []

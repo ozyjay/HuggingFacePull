@@ -134,6 +134,16 @@ def installed_models(library_dir: Path) -> list[dict[str, Any]]:
             continue
         if "repo_id" not in metadata or "revision" not in metadata:
             continue
+        skip_reason = _installed_metadata_skip_reason(metadata)
+        if skip_reason is not None:
+            _log(
+                "installed metadata skipped",
+                marker=marker,
+                repo_id=metadata.get("repo_id"),
+                revision=metadata.get("revision"),
+                **skip_reason,
+            )
+            continue
         installed.append(metadata)
     return sorted(
         installed,
@@ -210,6 +220,56 @@ def _cache_snapshot_skip_reason(snapshot: Path) -> dict[str, Any] | None:
             found_file = True
     if not found_file:
         return {"reason": "empty"}
+    return None
+
+
+def _installed_metadata_skip_reason(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    snapshot_path = metadata.get("snapshot_path")
+    if not isinstance(snapshot_path, str) or not snapshot_path.strip():
+        return None
+    return _snapshot_integrity_skip_reason(Path(snapshot_path), metadata.get("files"))
+
+
+def _snapshot_integrity_skip_reason(
+    snapshot: Path,
+    expected_files: Any = None,
+) -> dict[str, Any] | None:
+    basic_reason = _cache_snapshot_skip_reason(snapshot)
+    if basic_reason is not None:
+        return basic_reason
+    if not isinstance(expected_files, list):
+        return None
+
+    for file in expected_files:
+        if not isinstance(file, dict):
+            continue
+        relative_path = file.get("path")
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            continue
+        path = snapshot / relative_path
+        if not path.exists():
+            return {
+                "reason": "broken_symlink" if path.is_symlink() else "missing_file",
+                "path": path,
+            }
+        if _is_partial_file(path):
+            return {"reason": "partial_file", "path": path}
+        expected_size = file.get("size")
+        if isinstance(expected_size, int):
+            try:
+                actual_size = path.stat().st_size
+            except FileNotFoundError:
+                return {
+                    "reason": "broken_symlink" if path.is_symlink() else "missing_file",
+                    "path": path,
+                }
+            if actual_size != expected_size:
+                return {
+                    "reason": "size_mismatch",
+                    "path": path,
+                    "expected_size": expected_size,
+                    "actual_size": actual_size,
+                }
     return None
 
 
@@ -512,6 +572,20 @@ def pull_snapshot(
             os.environ.pop("HF_HUB_DISABLE_XET", None)
         else:
             os.environ["HF_HUB_DISABLE_XET"] = previous_disable_xet
+
+    skip_reason = _snapshot_integrity_skip_reason(snapshot_path, files)
+    if skip_reason is not None:
+        _log(
+            "downloaded snapshot incomplete",
+            repo_id=ref.repo_id,
+            revision=ref.revision,
+            snapshot_path=snapshot_path,
+            **skip_reason,
+        )
+        reason = skip_reason.get("reason", "incomplete")
+        detail = f" at {skip_reason['path']}" if "path" in skip_reason else ""
+        raise RuntimeError(f"Downloaded snapshot is incomplete: {reason}{detail}")
+
     metadata_dir.mkdir(parents=True, exist_ok=True)
     metadata = {
         "repo_id": ref.repo_id,
@@ -519,6 +593,7 @@ def pull_snapshot(
         "repo_type": ref.repo_type,
         "snapshot_path": str(snapshot_path),
         "size": directory_size(snapshot_path),
+        "files": files,
     }
     marker.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
 
