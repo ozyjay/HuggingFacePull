@@ -237,7 +237,27 @@
 
   function renderSearchResults() {
     if (!state.searchResults.length && !state.searchError) {
-      els.searchResults.innerHTML = `<p class="empty">Search for public Hub repos, or add an exact HF repo ID directly.</p>`;
+      const cachedSuggestions = availableCachedSnapshots(
+        (state.snapshot && state.snapshot.installed_models) || [],
+        (state.snapshot && state.snapshot.cached_models) || [],
+      );
+      if (!cachedSuggestions.length) {
+        els.searchResults.innerHTML = `<p class="empty">Search for public Hub repos, or add an exact HF repo ID directly.</p>`;
+        return;
+      }
+      els.searchResults.innerHTML = `
+        <div class="file-summary">${cachedSuggestions.length} cached snapshot${cachedSuggestions.length === 1 ? "" : "s"} ready to add</div>
+        ${cachedSuggestions.slice(0, 20).map((item) => `
+          <article class="result-row">
+            <div>
+              <strong>${escapeHtml(item.repo_id)}</strong>
+              <small>${escapeHtml(item.revision || "main")} | ${escapeHtml(item.source || "huggingface_cache")}</small>
+            </div>
+            <button type="button" data-add-search="${escapeAttr(item.repo_id)}" data-add-revision="${escapeAttr(item.revision || "main")}" data-add-repo-type="${escapeAttr(item.repo_type || "model")}">Add from cache</button>
+          </article>
+        `).join("")}
+      `;
+      bindSearchAddButtons();
       return;
     }
     if (state.searchError) {
@@ -267,14 +287,20 @@
           </div>
           ${installState === "installed"
             ? `<button type="button" class="secondary" disabled>Installed</button>`
-            : `<button type="button" data-add-search="${escapeAttr(repoId)}">${installState === "cached" ? "Add from cache" : "Add"}</button>`}
+            : `<button type="button" data-add-search="${escapeAttr(repoId)}" data-add-revision="${escapeAttr(els.revisionInput.value.trim() || "main")}" data-add-repo-type="${escapeAttr(els.repoTypeInput.value || "model")}">${installState === "cached" ? "Add from cache" : "Add"}</button>`}
         </article>
       `;
     }).join("");
 
+    bindSearchAddButtons();
+  }
+
+  function bindSearchAddButtons() {
     els.searchResults.querySelectorAll("[data-add-search]").forEach((button) => {
       button.addEventListener("click", async () => {
         els.repoIdInput.value = button.getAttribute("data-add-search") || "";
+        els.revisionInput.value = button.getAttribute("data-add-revision") || "main";
+        els.repoTypeInput.value = button.getAttribute("data-add-repo-type") || "model";
         try {
           const item = await addRepoFromForm(els.repoIdInput.value);
           state.selectedItemId = item.id;
@@ -619,6 +645,24 @@
     return cacheMatch ? "cached" : "available";
   }
 
+  function availableCachedSnapshots(installed, cached) {
+    const seen = new Set();
+    return (cached || []).filter((item) => {
+      const repoId = item && item.repo_id;
+      if (!repoId) {
+        return false;
+      }
+      const revision = item.revision || "main";
+      const repoType = item.repo_type || "model";
+      const key = `${repoType}:${repoId}@${revision}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return snapshotInstallState(installed, [], repoId, revision, repoType) !== "installed";
+    });
+  }
+
   function repoPath(repoId) {
     return repoId.split("/").map(encodeURIComponent).join("/");
   }
@@ -743,6 +787,7 @@
     render,
     isInstalledSnapshot,
     snapshotInstallState,
+    availableCachedSnapshots,
     downloadStatusLine,
     cleanupSummaryLine,
     queueControlState,

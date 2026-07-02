@@ -89,6 +89,22 @@ def test_search_install_state_matches_repo_revision_and_type():
           ),
           "available",
         );
+        assert.deepEqual(
+          context.window.HuggingFacePull.availableCachedSnapshots(
+            installed,
+            [
+              { repo_id: "Qwen/Qwen3", revision: "main", repo_type: "model" },
+              { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model" },
+              { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model" },
+              { repo_id: "Qwen/Qwen2.5-0.5B", revision: "dev", repo_type: "model" },
+              { revision: "main", repo_type: "model" },
+            ],
+          ),
+          [
+            { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model" },
+            { repo_id: "Qwen/Qwen2.5-0.5B", revision: "dev", repo_type: "model" },
+          ],
+        );
         """
     )
 
