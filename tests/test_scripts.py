@@ -4,9 +4,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_powershell_workflow_scripts_exist():
+def test_workflow_scripts_exist():
     scripts = ROOT / "scripts"
 
+    assert (scripts / "install.sh").is_file()
     assert (scripts / "setup.ps1").is_file()
     assert (scripts / "test.ps1").is_file()
     assert (scripts / "run.ps1").is_file()
@@ -14,12 +15,19 @@ def test_powershell_workflow_scripts_exist():
     assert (scripts / "list_hf_caches.py").is_file()
 
 
-def test_powershell_scripts_cover_core_workflows():
+def test_workflow_scripts_cover_core_workflows():
+    install = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     setup = (ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
     test = (ROOT / "scripts" / "test.ps1").read_text(encoding="utf-8")
     run = (ROOT / "scripts" / "run.ps1").read_text(encoding="utf-8")
     cache_lister = (ROOT / "scripts" / "list_hf_caches.py").read_text(encoding="utf-8")
 
+    assert "Detected platform" in install
+    assert "fedora" in install
+    assert "debian" in install
+    assert "macos" in install
+    assert "python3-venv" in install
+    assert 'pip install -e "$install_target"' in install
     assert 'Invoke-Checked "python3" "-m" "venv" ".venv"' in setup
     assert '".[dev]"' in setup
     assert "pytest" in test

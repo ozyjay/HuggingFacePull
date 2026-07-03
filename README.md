@@ -4,6 +4,21 @@ Local FastAPI tool for searching, queueing, and downloading Hugging Face Hub mod
 
 ## Setup
 
+On Linux or macOS:
+
+```bash
+./scripts/install.sh
+```
+
+On Fedora, including Framework desktops, the installer can also install missing
+system Python packages before creating the virtual environment:
+
+```bash
+./scripts/install.sh --install-system-deps
+```
+
+On Windows or PowerShell:
+
 ```powershell
 ./scripts/setup.ps1
 ```
