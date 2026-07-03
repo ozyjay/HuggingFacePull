@@ -662,10 +662,10 @@ def test_pull_snapshot_disables_xet_before_lazy_hub_import(monkeypatch, tmp_path
     hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
 
     assert seen == ["1"]
-    assert os.environ.get("HF_HUB_DISABLE_XET") is None
+    assert os.environ.get("HF_HUB_DISABLE_XET") == "1"
 
 
-def test_pull_snapshot_restores_existing_xet_setting(monkeypatch, tmp_path):
+def test_pull_snapshot_overrides_existing_xet_setting(monkeypatch, tmp_path):
     seen = []
 
     def fake_snapshot_download(**kwargs):
@@ -685,7 +685,7 @@ def test_pull_snapshot_restores_existing_xet_setting(monkeypatch, tmp_path):
     hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
 
     assert seen == ["1"]
-    assert os.environ.get("HF_HUB_DISABLE_XET") == "0"
+    assert os.environ.get("HF_HUB_DISABLE_XET") == "1"
 
 
 def test_pull_snapshot_emits_aggregate_byte_progress_from_snapshot_tqdm(monkeypatch, tmp_path):

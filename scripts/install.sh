@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+export HF_HUB_DISABLE_XET=1
+unset HF_XET_HIGH_PERFORMANCE
+unset HF_XET_CHUNK_CACHE_SIZE_BYTES
+unset HF_XET_SHARD_CACHE_SIZE_LIMIT
+
 usage() {
     cat <<'EOF'
 Usage: ./scripts/install.sh [options]

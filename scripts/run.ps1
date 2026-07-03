@@ -11,6 +11,11 @@ $webCommand = Get-VenvCommand -Name "hfpull-web"
 
 Set-Location $root
 
+$env:HF_HUB_DISABLE_XET = "1"
+Remove-Item Env:HF_XET_HIGH_PERFORMANCE -ErrorAction SilentlyContinue
+Remove-Item Env:HF_XET_CHUNK_CACHE_SIZE_BYTES -ErrorAction SilentlyContinue
+Remove-Item Env:HF_XET_SHARD_CACHE_SIZE_LIMIT -ErrorAction SilentlyContinue
+
 $args = @("--host", $HostName, "--port", "$Port")
 if ($LibraryDir) {
     $args += @("--library-dir", $LibraryDir)

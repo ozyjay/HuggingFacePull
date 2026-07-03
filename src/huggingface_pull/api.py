@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ def create_app(
     def state() -> dict[str, Any]:
         snapshot = queue.snapshot()
         snapshot["cached_models"] = cached_hub_models()
+        snapshot["server_pid"] = os.getpid()
         return snapshot
 
     @app.get("/api/search")

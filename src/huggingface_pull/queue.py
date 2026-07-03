@@ -765,6 +765,7 @@ def _cache_partial_progress_event(
     downloaded = 0
     largest_partial: tuple[int, str] | None = None
     planned_blobs: set[str] = set()
+    matched_partials: set[Path] = set()
 
     for file in files:
         if not isinstance(file, dict):
@@ -781,6 +782,7 @@ def _cache_partial_progress_event(
 
         partial_size = 0
         for partial in blobs_dir.glob(f"{blob_id}*.incomplete"):
+            matched_partials.add(partial)
             size = _file_size(partial)
             partial_size += size
             if largest_partial is None or size > largest_partial[0]:
@@ -788,15 +790,18 @@ def _cache_partial_progress_event(
         if partial_size:
             downloaded += min(partial_size, expected_size) if isinstance(expected_size, int) else partial_size
 
-    if not planned_blobs:
-        for partial in blobs_dir.glob("*.incomplete"):
-            size = _file_size(partial)
-            downloaded += size
-            if largest_partial is None or size > largest_partial[0]:
-                largest_partial = (size, partial.name)
+    for partial in blobs_dir.glob("*.incomplete"):
+        if partial in matched_partials:
+            continue
+        size = _file_size(partial)
+        downloaded += size
+        if largest_partial is None or size > largest_partial[0]:
+            largest_partial = (size, partial.name)
 
     if downloaded <= 0:
         return None
+    if isinstance(total, int) and total > 0:
+        downloaded = min(downloaded, total)
 
     percent = downloaded / total * 100 if isinstance(total, int) and total > 0 else None
     event: dict[str, Any] = {

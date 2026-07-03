@@ -120,7 +120,7 @@
     const selected = selectedItem(items);
 
     els.runtimeSummary.textContent = snapshot.library_dir
-      ? `Metadata directory: ${snapshot.library_dir} | Model cache: ~/.cache/huggingface/hub | Hub endpoint: ${snapshot.endpoint || "unknown"}`
+      ? `Server: ${window.location.origin} | PID: ${snapshot.server_pid || "unknown"} | Metadata: ${snapshot.library_dir} | Model cache: ~/.cache/huggingface/hub | Hub endpoint: ${snapshot.endpoint || "unknown"}`
       : "Loading local state...";
     els.queueSummary.textContent = `${items.length} item${items.length === 1 ? "" : "s"} | ${queueRunState(snapshot)}`;
     els.installedSummary.textContent = `${installed.length} snapshot${installed.length === 1 ? "" : "s"}`;

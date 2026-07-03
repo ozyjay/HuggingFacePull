@@ -164,9 +164,17 @@ function startBackend(root, port) {
   }
 
   const args = ["--host", HOST, "--port", String(port), "--no-browser"];
+  const env = {
+    ...process.env,
+    HF_HUB_DISABLE_XET: "1",
+  };
+  delete env.HF_XET_HIGH_PERFORMANCE;
+  delete env.HF_XET_CHUNK_CACHE_SIZE_BYTES;
+  delete env.HF_XET_SHARD_CACHE_SIZE_LIMIT;
+
   backendProcess = spawn(command, args, {
     cwd: root,
-    env: { ...process.env },
+    env,
     stdio: ["ignore", "pipe", "pipe"],
   });
 

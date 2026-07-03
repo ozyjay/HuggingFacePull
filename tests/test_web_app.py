@@ -9,6 +9,9 @@ def test_search_install_state_matches_repo_revision_and_type():
         const fs = require("node:fs");
         const vm = require("node:vm");
 
+        const source = fs.readFileSync("src/huggingface_pull/web/app.js", "utf8");
+        assert(source.includes("Server: ${window.location.origin}"));
+
         const context = {
           window: {},
           document: {
@@ -19,7 +22,7 @@ def test_search_install_state_matches_repo_revision_and_type():
           fetch() {},
         };
         vm.createContext(context);
-        vm.runInContext(fs.readFileSync("src/huggingface_pull/web/app.js", "utf8"), context);
+        vm.runInContext(source, context);
 
         const installed = [
           { repo_id: "Qwen/Qwen3", revision: "main", repo_type: "model" },

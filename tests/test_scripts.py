@@ -45,6 +45,7 @@ def test_workflow_scripts_cover_core_workflows():
     assert "nodeIntegration: false" in desktop_main
     assert "contextIsolation: true" in desktop_main
     assert "Detected platform" in install
+    assert "HF_HUB_DISABLE_XET=1" in install
     assert "fedora" in install
     assert "debian" in install
     assert "macos" in install
@@ -57,6 +58,7 @@ def test_workflow_scripts_cover_core_workflows():
     assert "desktop/main.cjs" in test
     assert "desktop/package.cjs" in test
     assert "hfpull-web" in run
+    assert "HF_HUB_DISABLE_XET" in run
     assert "HF_HUB_CACHE" in cache_lister
     assert "--json" in cache_lister
 

@@ -137,6 +137,31 @@ def test_cache_partial_progress_event_counts_completed_blobs(monkeypatch, tmp_pa
     assert event["percent"] == 50.0
 
 
+def test_cache_partial_progress_event_counts_unmatched_active_partials(monkeypatch, tmp_path):
+    monkeypatch.setattr(queue_module.hub, "HF_HUB_CACHE", str(tmp_path))
+    blobs = tmp_path / "models--google--diffusiongemma-26B-A4B-it" / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / "config").write_bytes(b"x" * 10)
+    (blobs / "sha256digest.worker.incomplete").write_bytes(b"x" * 40)
+
+    event = queue_module._cache_partial_progress_event(
+        hub.HubRef(repo_id="google/diffusiongemma-26B-A4B-it"),
+        {
+            "type": "model-plan",
+            "total_bytes": 100,
+            "files": [
+                {"path": "config.json", "size": 10, "blob_id": "config"},
+                {"path": "model.safetensors", "size": 90, "blob_id": "git-lfs-pointer"},
+            ],
+        },
+    )
+
+    assert event["downloaded"] == 50
+    assert event["total"] == 100
+    assert event["percent"] == 50.0
+    assert event["path"] == "sha256digest.worker.incomplete"
+
+
 def test_snapshot_includes_installed_models(monkeypatch, tmp_path):
     installed = [{"repo_id": "Qwen/Qwen3", "revision": "main", "size": 12}]
     monkeypatch.setattr(queue_module.hub, "installed_models", lambda library_dir: installed)

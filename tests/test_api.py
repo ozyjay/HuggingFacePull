@@ -36,8 +36,10 @@ def test_state_endpoint_returns_snapshot(tmp_path):
     response = client.get("/api/state")
 
     assert response.status_code == 200
-    assert response.json()["items"] == []
-    assert response.json()["library_dir"] == str(tmp_path)
+    data = response.json()
+    assert data["items"] == []
+    assert data["library_dir"] == str(tmp_path)
+    assert isinstance(data["server_pid"], int)
 
 
 def test_static_index_served(tmp_path):
@@ -348,7 +350,7 @@ def test_run_web_constructs_uvicorn_server_and_opens_browser_on_startup(monkeypa
         (
             "pre-launch diagnostics",
             {
-                "HF_HUB_DISABLE_XET": None,
+                "HF_HUB_DISABLE_XET": "1",
                 "HF_HUB_DOWNLOAD_TIMEOUT": None,
                 "HF_HUB_ETAG_TIMEOUT": None,
                 "HUGGINGFACE_PULL_MAX_WORKERS": "1",

@@ -26,6 +26,16 @@ snapshot_download: Any | None = None
 hf_tqdm: Any | None = None
 
 
+def force_disable_xet() -> None:
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    os.environ.pop("HF_XET_HIGH_PERFORMANCE", None)
+    os.environ.pop("HF_XET_CHUNK_CACHE_SIZE_BYTES", None)
+    os.environ.pop("HF_XET_SHARD_CACHE_SIZE_LIMIT", None)
+
+
+force_disable_xet()
+
+
 class DownloadStoppedAfterFile(Exception):
     """Raised when a caller requests a stop after a completed snapshot pull."""
 
@@ -517,61 +527,57 @@ def pull_snapshot(
             progress({"type": "model-complete", "repo_id": ref.repo_id, "dry_run": True})
         return metadata_dir
 
-    previous_disable_xet = os.environ.get("HF_HUB_DISABLE_XET")
-    os.environ["HF_HUB_DISABLE_XET"] = "1"
-    try:
-        api = _hf_api_class()(endpoint=endpoint)
-        info = api.model_info(
-            ref.repo_id,
+    force_disable_xet()
+    api = _hf_api_class()(endpoint=endpoint)
+    info = api.model_info(
+        ref.repo_id,
+        revision=ref.revision,
+        files_metadata=True,
+        token=token,
+    )
+    files = _filter_repo_files(
+        [
+            {
+                "path": sibling.rfilename,
+                "size": sibling.size,
+                "blob_id": getattr(sibling, "blob_id", None),
+            }
+            for sibling in info.siblings
+        ],
+        allow_patterns=ref.allow_patterns,
+        ignore_patterns=ref.ignore_patterns,
+    )
+    if progress is not None:
+        progress(
+            {
+                "type": "model-plan",
+                "repo_id": ref.repo_id,
+                "revision": ref.revision,
+                "total_bytes": _sum_file_sizes(files),
+                "files": files,
+            }
+        )
+    snapshot_path = Path(
+        _snapshot_download_func()(
+            repo_id=ref.repo_id,
             revision=ref.revision,
-            files_metadata=True,
+            repo_type=None if ref.repo_type == "model" else ref.repo_type,
+            cache_dir=Path(HF_HUB_CACHE),
+            endpoint=endpoint,
             token=token,
+            allow_patterns=list(ref.allow_patterns) or None,
+            ignore_patterns=list(ref.ignore_patterns) or None,
+            max_workers=max_workers if max_workers is not None else default_max_workers(),
+            tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
+            if progress is not None
+            else None,
         )
-        files = _filter_repo_files(
-            [
-                {
-                    "path": sibling.rfilename,
-                    "size": sibling.size,
-                    "blob_id": getattr(sibling, "blob_id", None),
-                }
-                for sibling in info.siblings
-            ],
-            allow_patterns=ref.allow_patterns,
-            ignore_patterns=ref.ignore_patterns,
-        )
-        if progress is not None:
-            progress(
-                {
-                    "type": "model-plan",
-                    "repo_id": ref.repo_id,
-                    "revision": ref.revision,
-                    "total_bytes": _sum_file_sizes(files),
-                    "files": files,
-                }
-            )
-        snapshot_path = Path(
-            _snapshot_download_func()(
-                repo_id=ref.repo_id,
-                revision=ref.revision,
-                repo_type=None if ref.repo_type == "model" else ref.repo_type,
-                cache_dir=Path(HF_HUB_CACHE),
-                endpoint=endpoint,
-                token=token,
-                allow_patterns=list(ref.allow_patterns) or None,
-                ignore_patterns=list(ref.ignore_patterns) or None,
-                max_workers=max_workers if max_workers is not None else default_max_workers(),
-                tqdm_class=_progress_tqdm_class(ref.repo_id, progress, stop_after_file)
-                if progress is not None
-                else None,
-            )
-        )
-        if stop_after_file is not None and stop_after_file():
-            raise DownloadStoppedAfterFile
-    finally:
-        if previous_disable_xet is None:
-            os.environ.pop("HF_HUB_DISABLE_XET", None)
-        else:
-            os.environ["HF_HUB_DISABLE_XET"] = previous_disable_xet
+    )
+    if stop_after_file is not None and stop_after_file():
+        raise DownloadStoppedAfterFile
+
+    if os.environ.get("HF_HUB_DISABLE_XET") != "1":
+        raise RuntimeError("HF_HUB_DISABLE_XET must remain set to 1 during downloads")
 
     skip_reason = _snapshot_integrity_skip_reason(snapshot_path, files)
     if skip_reason is not None:
@@ -644,6 +650,7 @@ def _local_file_size(path: Path) -> int:
 
 
 def _hf_api_class() -> Any:
+    force_disable_xet()
     if HfApi is not None:
         return HfApi
     from huggingface_hub import HfApi as imported_hf_api
@@ -652,6 +659,7 @@ def _hf_api_class() -> Any:
 
 
 def _snapshot_download_func() -> Any:
+    force_disable_xet()
     if snapshot_download is not None:
         return snapshot_download
     from huggingface_hub import snapshot_download as imported_snapshot_download

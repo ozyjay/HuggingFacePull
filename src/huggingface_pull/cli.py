@@ -11,7 +11,7 @@ import uvicorn
 from .api import create_app
 from .app_logging import write_log
 from .config import DEFAULT_ENDPOINT, default_library_dir, default_max_workers
-from .hub import HubRef, cleanup_library, pull_snapshot
+from .hub import HubRef, cleanup_library, force_disable_xet, pull_snapshot
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,6 +78,7 @@ def _log(message: str, /, **fields: object) -> None:
 
 
 def _log_pre_launch_diagnostics() -> None:
+    force_disable_xet()
     _log(
         "pre-launch diagnostics",
         HF_HUB_DISABLE_XET=os.environ.get("HF_HUB_DISABLE_XET"),
