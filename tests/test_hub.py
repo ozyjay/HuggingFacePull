@@ -323,6 +323,31 @@ def test_cached_hub_models_skips_incomplete_sharded_payload(tmp_path, monkeypatc
     ]
 
 
+def test_partial_cached_hub_models_reports_incomplete_sharded_payload(tmp_path, monkeypatch):
+    cache = tmp_path / "hub"
+    model = cache / "models--google--diffusiongemma-26B-A4B-it"
+    snapshot = model / "snapshots" / "abc123"
+    ref = model / "refs" / "main"
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model-00001-of-00003.safetensors").write_bytes(b"one")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    assert hub.partial_cached_hub_models() == [
+        {
+            "repo_id": "google/diffusiongemma-26B-A4B-it",
+            "revision": "main",
+            "repo_type": "model",
+            "snapshot_path": str(snapshot),
+            "source": "huggingface_cache",
+            "cache_status": "partial",
+            "reason": "incomplete_sharded_payload",
+        }
+    ]
+
+
 def test_search_models_empty_query_returns_available_without_api(monkeypatch):
     monkeypatch.setattr(
         hub,

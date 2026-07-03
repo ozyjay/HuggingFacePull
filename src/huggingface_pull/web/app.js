@@ -240,6 +240,7 @@
       const cachedSuggestions = availableCachedSnapshots(
         (state.snapshot && state.snapshot.installed_models) || [],
         (state.snapshot && state.snapshot.cached_models) || [],
+        (state.snapshot && state.snapshot.partial_cached_models) || [],
       );
       if (!cachedSuggestions.length) {
         els.searchResults.innerHTML = `<p class="empty">Search for public Hub repos, or add an exact HF repo ID directly.</p>`;
@@ -251,9 +252,9 @@
           <article class="result-row">
             <div>
               <strong>${escapeHtml(item.repo_id)}</strong>
-              <small>${escapeHtml(item.revision || "main")} | ${escapeHtml(item.source || "huggingface_cache")}</small>
+              <small>${escapeHtml(item.revision || "main")} | ${escapeHtml(cacheSourceLabel(item))}</small>
             </div>
-            <button type="button" data-add-search="${escapeAttr(item.repo_id)}" data-add-revision="${escapeAttr(item.revision || "main")}" data-add-repo-type="${escapeAttr(item.repo_type || "model")}">Add from cache</button>
+            <button type="button" data-add-search="${escapeAttr(item.repo_id)}" data-add-revision="${escapeAttr(item.revision || "main")}" data-add-repo-type="${escapeAttr(item.repo_type || "model")}">${cacheActionLabel(item.cache_status === "partial" ? "partial_cache" : "cached")}</button>
           </article>
         `).join("")}
       `;
@@ -270,6 +271,7 @@
       const installState = snapshotInstallState(
         (state.snapshot && state.snapshot.installed_models) || [],
         (state.snapshot && state.snapshot.cached_models) || [],
+        (state.snapshot && state.snapshot.partial_cached_models) || [],
         repoId,
         els.revisionInput.value.trim() || "main",
         els.repoTypeInput.value || "model",
@@ -287,7 +289,7 @@
           </div>
           ${installState === "installed"
             ? `<button type="button" class="secondary" disabled>Installed</button>`
-            : `<button type="button" data-add-search="${escapeAttr(repoId)}" data-add-revision="${escapeAttr(els.revisionInput.value.trim() || "main")}" data-add-repo-type="${escapeAttr(els.repoTypeInput.value || "model")}">${installState === "cached" ? "Add from cache" : "Add"}</button>`}
+            : `<button type="button" data-add-search="${escapeAttr(repoId)}" data-add-revision="${escapeAttr(els.revisionInput.value.trim() || "main")}" data-add-repo-type="${escapeAttr(els.repoTypeInput.value || "model")}">${cacheActionLabel(installState)}</button>`}
         </article>
       `;
     }).join("");
@@ -366,6 +368,7 @@
             <div class="row-meta">
               <span>${escapeHtml(item.revision || "main")}</span>
               <span>${formatProgressAmount(overall)}</span>
+              ${progressBreakdown(overall) ? `<span>${escapeHtml(progressBreakdown(overall))}</span>` : ""}
               <span>${formatPercent(overall.percent)}</span>
               <span>${formatSpeed(overall.bytes_per_second)}</span>
               <span>ETA ${formatDuration(overall.eta_seconds)}</span>
@@ -458,6 +461,7 @@
         <dl>
           <div><dt>Phase</dt><dd>${escapeHtml(progress.phase || item.status)}</dd></div>
           <div><dt>Overall</dt><dd>${formatProgressAmount(overall)}</dd></div>
+          ${progressBreakdown(overall) ? `<div><dt>Cache</dt><dd>${escapeHtml(progressBreakdown(overall))}</dd></div>` : ""}
           <div><dt>Percent</dt><dd>${formatPercent(overall.percent)}</dd></div>
           <div><dt>Speed</dt><dd>${formatSpeed(overall.bytes_per_second)}</dd></div>
           <div><dt>ETA</dt><dd>${formatDuration(overall.eta_seconds)}</dd></div>
@@ -574,6 +578,10 @@
       parts.push(percent);
     }
     parts.push(formatProgressAmount(overall));
+    const breakdown = progressBreakdown(overall);
+    if (breakdown) {
+      parts.push(breakdown);
+    }
     const speed = formatSpeed(overall.bytes_per_second);
     if (speed !== "no speed") {
       parts.push(speed);
@@ -623,10 +631,16 @@
   }
 
   function isInstalledSnapshot(installed, cached, repoId, revision, repoType) {
-    return snapshotInstallState(installed, cached, repoId, revision, repoType) === "installed";
+    return snapshotInstallState(installed, cached, [], repoId, revision, repoType) === "installed";
   }
 
-  function snapshotInstallState(installed, cached, repoId, revision, repoType) {
+  function snapshotInstallState(installed, cached, partialCached, repoId, revision, repoType) {
+    if (typeof partialCached === "string") {
+      repoType = revision;
+      revision = repoId;
+      repoId = partialCached;
+      partialCached = [];
+    }
     const expectedRevision = revision || "main";
     const expectedRepoType = repoType || "model";
     const managedMatch = (installed || []).some((item) => (
@@ -642,12 +656,20 @@
       && item.revision === expectedRevision
       && (item.repo_type || "model") === expectedRepoType
     ));
-    return cacheMatch ? "cached" : "available";
+    if (cacheMatch) {
+      return "cached";
+    }
+    const partialCacheMatch = (partialCached || []).some((item) => (
+      item.repo_id === repoId
+      && item.revision === expectedRevision
+      && (item.repo_type || "model") === expectedRepoType
+    ));
+    return partialCacheMatch ? "partial_cache" : "available";
   }
 
-  function availableCachedSnapshots(installed, cached) {
+  function availableCachedSnapshots(installed, cached, partialCached) {
     const seen = new Set();
-    return (cached || []).filter((item) => {
+    return [...(cached || []), ...(partialCached || [])].filter((item) => {
       const repoId = item && item.repo_id;
       if (!repoId) {
         return false;
@@ -659,8 +681,25 @@
         return false;
       }
       seen.add(key);
-      return snapshotInstallState(installed, [], repoId, revision, repoType) !== "installed";
+      return snapshotInstallState(installed, [], [], repoId, revision, repoType) !== "installed";
     });
+  }
+
+  function cacheActionLabel(installState) {
+    if (installState === "cached") {
+      return "Add from cache";
+    }
+    if (installState === "partial_cache") {
+      return "Resume download";
+    }
+    return "Add";
+  }
+
+  function cacheSourceLabel(item) {
+    if (item && item.cache_status === "partial") {
+      return "partial HF cache";
+    }
+    return (item && item.source) || "huggingface_cache";
   }
 
   function repoPath(repoId) {
@@ -713,6 +752,27 @@
       return `Downloaded ${formatBytes(downloaded)} | total calculating...`;
     }
     return `${formatBytes(downloaded)} / ${formatBytes(total)}`;
+  }
+
+  function progressBreakdown(overall) {
+    if (!overall) {
+      return "";
+    }
+    const parts = [];
+    if (isPositiveNumber(overall.cached_bytes)) {
+      parts.push(`${formatBytes(overall.cached_bytes)} cached`);
+    }
+    if (isPositiveNumber(overall.partial_bytes)) {
+      parts.push(`${formatBytes(overall.partial_bytes)} active partial`);
+    }
+    if (isPositiveNumber(overall.untracked_partial_bytes)) {
+      parts.push(`${formatBytes(overall.untracked_partial_bytes)} active cache partial`);
+    }
+    return parts.join(" + ");
+  }
+
+  function isPositiveNumber(value) {
+    return typeof value === "number" && Number.isFinite(value) && value > 0;
   }
 
   function formatPercent(value) {
@@ -788,7 +848,9 @@
     isInstalledSnapshot,
     snapshotInstallState,
     availableCachedSnapshots,
+    cacheActionLabel,
     downloadStatusLine,
+    progressBreakdown,
     cleanupSummaryLine,
     queueControlState,
     queueRunState,

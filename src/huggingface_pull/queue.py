@@ -461,6 +461,9 @@ class DownloadQueue:
             "total": event.get("total"),
             "percent": event.get("percent"),
         }
+        for key in ("cached_bytes", "partial_bytes", "untracked_partial_bytes"):
+            if event.get(key) is not None:
+                aggregate[key] = event.get(key)
         speed = self._event_speed(event)
         if speed is not None:
             aggregate["bytes_per_second"] = speed
@@ -769,6 +772,9 @@ def _cache_partial_progress_event(
         total = sum(size for size in sizes if isinstance(size, int)) or None
 
     downloaded = 0
+    cached_bytes = 0
+    partial_bytes = 0
+    untracked_partial_bytes = 0
     largest_partial: tuple[int, str] | None = None
     planned_blobs: set[str] = set()
     matched_partials: set[Path] = set()
@@ -783,24 +789,29 @@ def _cache_partial_progress_event(
         expected_size = file.get("size")
         completed = _file_size(blobs_dir / blob_id)
         if completed:
-            downloaded += min(completed, expected_size) if isinstance(expected_size, int) else completed
+            counted = min(completed, expected_size) if isinstance(expected_size, int) else completed
+            downloaded += counted
+            cached_bytes += counted
             continue
 
-        partial_size = 0
+        matched_partial_size = 0
         for partial in blobs_dir.glob(f"{blob_id}*.incomplete"):
             matched_partials.add(partial)
             size = _file_size(partial)
-            partial_size += size
+            matched_partial_size += size
             if largest_partial is None or size > largest_partial[0]:
                 largest_partial = (size, str(file.get("path") or partial.name))
-        if partial_size:
-            downloaded += min(partial_size, expected_size) if isinstance(expected_size, int) else partial_size
+        if matched_partial_size:
+            counted = min(matched_partial_size, expected_size) if isinstance(expected_size, int) else matched_partial_size
+            downloaded += counted
+            partial_bytes += counted
 
     for partial in blobs_dir.glob("*.incomplete"):
         if partial in matched_partials:
             continue
         size = _file_size(partial)
         downloaded += size
+        untracked_partial_bytes += size
         if largest_partial is None or size > largest_partial[0]:
             largest_partial = (size, partial.name)
 
@@ -820,6 +831,12 @@ def _cache_partial_progress_event(
     }
     if largest_partial is not None:
         event["path"] = largest_partial[1]
+    if cached_bytes > 0:
+        event["cached_bytes"] = cached_bytes
+    if partial_bytes > 0:
+        event["partial_bytes"] = partial_bytes
+    if untracked_partial_bytes > 0:
+        event["untracked_partial_bytes"] = untracked_partial_bytes
     return event
 
 

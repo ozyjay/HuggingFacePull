@@ -226,6 +226,60 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
     return cached
 
 
+def partial_cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any]]:
+    root = Path(cache_dir or HF_HUB_CACHE)
+    partial: list[dict[str, Any]] = []
+    if not root.exists():
+        return partial
+
+    for repo_dir in sorted(root.glob("models--*")):
+        if not repo_dir.is_dir():
+            continue
+        repo_id = _repo_id_from_cache_dir(repo_dir.name, "models")
+        if repo_id is None:
+            continue
+        snapshots = repo_dir / "snapshots"
+        if not snapshots.is_dir():
+            continue
+        refs = _cache_refs(repo_dir)
+        if refs:
+            for revision, commit in refs.items():
+                snapshot = snapshots / commit
+                skip_reason = _cache_snapshot_skip_reason(snapshot, require_model_payload=True)
+                entry = _partial_cache_entry(repo_id, revision, snapshot, skip_reason)
+                if entry is not None:
+                    partial.append(entry)
+            continue
+        for snapshot in sorted(snapshots.iterdir()):
+            skip_reason = _cache_snapshot_skip_reason(snapshot, require_model_payload=True)
+            entry = _partial_cache_entry(repo_id, snapshot.name, snapshot, skip_reason)
+            if entry is not None:
+                partial.append(entry)
+    return partial
+
+
+def _partial_cache_entry(
+    repo_id: str,
+    revision: str,
+    snapshot: Path,
+    skip_reason: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if skip_reason is None:
+        return None
+    reason = skip_reason.get("reason")
+    if reason not in {"partial_file", "incomplete_sharded_payload"}:
+        return None
+    return {
+        "repo_id": repo_id,
+        "revision": revision,
+        "repo_type": "model",
+        "snapshot_path": str(snapshot),
+        "source": "huggingface_cache",
+        "cache_status": "partial",
+        "reason": reason,
+    }
+
+
 def _cache_snapshot_skip_reason(
     snapshot: Path,
     *,

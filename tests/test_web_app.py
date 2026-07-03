@@ -31,6 +31,9 @@ def test_search_install_state_matches_repo_revision_and_type():
         const cached = [
           { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model" },
         ];
+        const partialCached = [
+          { repo_id: "google/diffusiongemma-26B-A4B-it", revision: "main", repo_type: "model", cache_status: "partial" },
+        ];
 
         assert.equal(
           context.window.HuggingFacePull.isInstalledSnapshot(
@@ -76,6 +79,21 @@ def test_search_install_state_matches_repo_revision_and_type():
           context.window.HuggingFacePull.snapshotInstallState(
             installed,
             cached,
+            partialCached,
+            "google/diffusiongemma-26B-A4B-it",
+            "main",
+            "model",
+          ),
+          "partial_cache",
+        );
+        assert.equal(
+          context.window.HuggingFacePull.cacheActionLabel("partial_cache"),
+          "Resume download",
+        );
+        assert.equal(
+          context.window.HuggingFacePull.snapshotInstallState(
+            installed,
+            cached,
             "Qwen/Qwen2.5-0.5B",
             "main",
             "model",
@@ -92,8 +110,8 @@ def test_search_install_state_matches_repo_revision_and_type():
           ),
           "available",
         );
-        assert.deepEqual(
-          context.window.HuggingFacePull.availableCachedSnapshots(
+        assert.equal(
+          JSON.stringify(context.window.HuggingFacePull.availableCachedSnapshots(
             installed,
             [
               { repo_id: "Qwen/Qwen3", revision: "main", repo_type: "model" },
@@ -102,11 +120,13 @@ def test_search_install_state_matches_repo_revision_and_type():
               { repo_id: "Qwen/Qwen2.5-0.5B", revision: "dev", repo_type: "model" },
               { revision: "main", repo_type: "model" },
             ],
-          ),
-          [
+            partialCached,
+          )),
+          JSON.stringify([
             { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model" },
             { repo_id: "Qwen/Qwen2.5-0.5B", revision: "dev", repo_type: "model" },
-          ],
+            { repo_id: "google/diffusiongemma-26B-A4B-it", revision: "main", repo_type: "model", cache_status: "partial" },
+          ]),
         );
         """
     )
@@ -149,6 +169,32 @@ def test_download_status_helpers_show_running_and_unknown_total_details():
             },
           }),
           "Downloading snapshot | 50.0% | 5.00 MB / 10.0 MB | 1.00 MB/s | ETA 5s",
+        );
+
+        assert.equal(
+          context.window.HuggingFacePull.downloadStatusLine({
+            status: "running",
+            progress: {
+              phase: "downloading",
+              overall: {
+                downloaded: 26738688,
+                total: 104857600,
+                percent: 25.5,
+                cached_bytes: 20971520,
+                partial_bytes: 5767168,
+              },
+              current_file: { name: "snapshot" },
+            },
+          }),
+          "Downloading snapshot | 25.5% | 25.5 MB / 100.0 MB | 20.0 MB cached + 5.50 MB active partial",
+        );
+
+        assert.equal(
+          context.window.HuggingFacePull.progressBreakdown({
+            cached_bytes: 20971520,
+            partial_bytes: 5767168,
+          }),
+          "20.0 MB cached + 5.50 MB active partial",
         );
 
         assert.equal(

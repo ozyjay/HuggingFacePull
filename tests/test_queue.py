@@ -110,6 +110,7 @@ def test_cache_partial_progress_event_reports_growing_incomplete_blob(monkeypatc
         "total": 100,
         "percent": 40.0,
         "path": "model.safetensors",
+        "partial_bytes": 40,
     }
 
 
@@ -135,6 +136,8 @@ def test_cache_partial_progress_event_counts_completed_blobs(monkeypatch, tmp_pa
     assert event["downloaded"] == 50
     assert event["total"] == 100
     assert event["percent"] == 50.0
+    assert event["cached_bytes"] == 30
+    assert event["partial_bytes"] == 20
 
 
 def test_cache_partial_progress_event_counts_unmatched_active_partials(monkeypatch, tmp_path):
@@ -160,6 +163,8 @@ def test_cache_partial_progress_event_counts_unmatched_active_partials(monkeypat
     assert event["total"] == 100
     assert event["percent"] == 50.0
     assert event["path"] == "sha256digest.worker.incomplete"
+    assert event["cached_bytes"] == 10
+    assert event["untracked_partial_bytes"] == 40
 
 
 def test_add_transfer_estimates_derives_speed_and_eta_from_cache_samples():
@@ -763,6 +768,8 @@ def test_progress_tracks_aggregate_download_progress(tmp_path):
             "percent": 25.0,
             "bytes_per_second": 10.0,
             "eta_seconds": 2,
+            "cached_bytes": 3,
+            "partial_bytes": 2,
         },
     )
 
@@ -775,6 +782,8 @@ def test_progress_tracks_aggregate_download_progress(tmp_path):
             "percent": 25.0,
             "bytes_per_second": 10.0,
             "eta_seconds": 2,
+            "cached_bytes": 3,
+            "partial_bytes": 2,
         },
         "current_file": {
             "name": "snapshot",
@@ -783,6 +792,8 @@ def test_progress_tracks_aggregate_download_progress(tmp_path):
             "percent": 25.0,
             "bytes_per_second": 10.0,
             "eta_seconds": 2,
+            "cached_bytes": 3,
+            "partial_bytes": 2,
             "updated_at": mock.ANY,
         },
     }

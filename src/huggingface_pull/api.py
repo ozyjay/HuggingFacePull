@@ -8,7 +8,16 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from .config import DEFAULT_ENDPOINT, default_library_dir
-from .hub import HubRef, cached_hub_models, cleanup_library, installed_models, remove_installed_model, repo_files, search_models
+from .hub import (
+    HubRef,
+    cached_hub_models,
+    cleanup_library,
+    installed_models,
+    partial_cached_hub_models,
+    remove_installed_model,
+    repo_files,
+    search_models,
+)
 from .models import CleanupRequest, InstalledRemoveRequest, QueueRequest
 from .queue import DownloadQueue
 
@@ -33,6 +42,7 @@ def create_app(
     def state() -> dict[str, Any]:
         snapshot = queue.snapshot()
         snapshot["cached_models"] = cached_hub_models()
+        snapshot["partial_cached_models"] = partial_cached_hub_models()
         snapshot["server_pid"] = os.getpid()
         return snapshot
 
