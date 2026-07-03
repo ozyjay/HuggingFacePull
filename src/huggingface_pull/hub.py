@@ -4,6 +4,7 @@ import dataclasses
 import fnmatch
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -26,6 +27,9 @@ MODEL_PAYLOAD_SUFFIXES = (
     ".ckpt",
     ".h5",
     ".msgpack",
+)
+SHARDED_PAYLOAD_RE = re.compile(
+    r"^(?P<prefix>.+)-(?P<index>\d{5})-of-(?P<total>\d{5})(?P<suffix>\.[^.]+)$"
 )
 _LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
 HF_HUB_CACHE = os.environ.get(
@@ -245,8 +249,47 @@ def _cache_snapshot_skip_reason(
             found_file = True
     if not found_file:
         return {"reason": "empty"}
+    sharded_reason = _sharded_payload_skip_reason(snapshot)
+    if sharded_reason is not None:
+        return sharded_reason
     if require_model_payload and not _has_model_payload(snapshot):
         return {"reason": "missing_model_payload"}
+    return None
+
+
+def _sharded_payload_skip_reason(snapshot: Path) -> dict[str, Any] | None:
+    shard_groups: dict[tuple[str, int, str], set[int]] = {}
+    for path in snapshot.rglob("*"):
+        if path.is_dir() or not path.exists():
+            continue
+        match = SHARDED_PAYLOAD_RE.match(path.name)
+        if match is None:
+            continue
+        suffix = match.group("suffix")
+        if suffix not in MODEL_PAYLOAD_SUFFIXES:
+            continue
+        total = int(match.group("total"))
+        index = int(match.group("index"))
+        if total <= 1:
+            continue
+        shard_groups.setdefault(
+            (match.group("prefix"), total, suffix),
+            set(),
+        ).add(index)
+
+    for (prefix, total, suffix), found in sorted(shard_groups.items()):
+        expected = set(range(1, total + 1))
+        missing = sorted(expected - found)
+        if missing:
+            return {
+                "reason": "incomplete_sharded_payload",
+                "path": snapshot,
+                "prefix": prefix,
+                "suffix": suffix,
+                "expected_shards": total,
+                "found_shards": len(found),
+                "missing_shards": missing,
+            }
     return None
 
 

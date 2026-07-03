@@ -283,6 +283,46 @@ def test_cached_hub_models_skips_metadata_only_snapshots(tmp_path, monkeypatch):
     assert hub.cached_hub_models() == []
 
 
+def test_cached_hub_models_skips_incomplete_sharded_payload(tmp_path, monkeypatch):
+    log_events = []
+    cache = tmp_path / "hub"
+    model = cache / "models--google--diffusiongemma-26B-A4B-it"
+    snapshot = model / "snapshots" / "abc123"
+    ref = model / "refs" / "main"
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model-00001-of-00003.safetensors").write_bytes(b"one")
+    (snapshot / "model-00002-of-00003.safetensors").write_bytes(b"two")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+    monkeypatch.setattr(
+        hub,
+        "write_log",
+        lambda message, **fields: log_events.append((message, fields)),
+        raising=False,
+    )
+
+    assert hub.cached_hub_models() == []
+    assert log_events == [
+        (
+            "cache snapshot skipped",
+            {
+                "repo_id": "google/diffusiongemma-26B-A4B-it",
+                "revision": "main",
+                "snapshot_path": snapshot,
+                "reason": "incomplete_sharded_payload",
+                "path": snapshot,
+                "prefix": "model",
+                "suffix": ".safetensors",
+                "expected_shards": 3,
+                "found_shards": 2,
+                "missing_shards": [3],
+            },
+        )
+    ]
+
+
 def test_search_models_empty_query_returns_available_without_api(monkeypatch):
     monkeypatch.setattr(
         hub,
