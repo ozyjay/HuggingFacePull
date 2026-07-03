@@ -765,6 +765,7 @@ def _cache_partial_progress_event(
     blobs_dir = repo_dir / "blobs"
     if not blobs_dir.is_dir():
         return None
+    snapshot_dirs = _hf_cache_snapshot_dirs(repo_dir, ref)
 
     total = last_progress.get("total_bytes") or last_progress.get("total")
     if not isinstance(total, int):
@@ -787,7 +788,9 @@ def _cache_partial_progress_event(
             continue
         planned_blobs.add(blob_id)
         expected_size = file.get("size")
-        completed = _file_size(blobs_dir / blob_id)
+        completed = _completed_snapshot_file_size(snapshot_dirs, file)
+        if not completed:
+            completed = _file_size(blobs_dir / blob_id)
         if completed:
             counted = min(completed, expected_size) if isinstance(expected_size, int) else completed
             downloaded += counted
@@ -872,6 +875,42 @@ def _hf_cache_repo_dir(ref: HubRef) -> Path:
         "space": "spaces",
     }.get(ref.repo_type, "models")
     return Path(hub.HF_HUB_CACHE) / f"{prefix}--{safe_repo_dir_name(ref.repo_id)}"
+
+
+def _hf_cache_snapshot_dirs(repo_dir: Path, ref: HubRef) -> list[Path]:
+    snapshots_dir = repo_dir / "snapshots"
+    if not snapshots_dir.is_dir():
+        return []
+
+    candidates: list[Path] = []
+    ref_path = repo_dir / "refs" / ref.revision
+    try:
+        commit = ref_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        commit = ""
+    if commit:
+        candidates.append(snapshots_dir / commit)
+    candidates.append(snapshots_dir / ref.revision)
+
+    seen: set[Path] = set()
+    existing: list[Path] = []
+    for candidate in candidates:
+        if candidate in seen or not candidate.is_dir():
+            continue
+        seen.add(candidate)
+        existing.append(candidate)
+    return existing
+
+
+def _completed_snapshot_file_size(snapshot_dirs: list[Path], file: dict[str, Any]) -> int:
+    relative_path = file.get("path") or file.get("name")
+    if not isinstance(relative_path, str) or not relative_path:
+        return 0
+    for snapshot_dir in snapshot_dirs:
+        size = _file_size(snapshot_dir / relative_path)
+        if size:
+            return size
+    return 0
 
 
 def _file_size(path: Path) -> int:

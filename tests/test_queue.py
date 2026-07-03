@@ -167,6 +167,50 @@ def test_cache_partial_progress_event_counts_unmatched_active_partials(monkeypat
     assert event["untracked_partial_bytes"] == 40
 
 
+def test_cache_partial_progress_event_counts_completed_snapshot_files_when_blob_id_differs(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(queue_module.hub, "HF_HUB_CACHE", str(tmp_path))
+    repo = tmp_path / "models--google--diffusiongemma-26B-A4B-it"
+    blobs = repo / "blobs"
+    snapshot = repo / "snapshots" / "abc123"
+    ref = repo / "refs" / "main"
+    blobs.mkdir(parents=True)
+    snapshot.mkdir(parents=True)
+    ref.parent.mkdir(parents=True)
+    ref.write_text("abc123", encoding="utf-8")
+    (blobs / "completed-sha").write_bytes(b"x" * 30)
+    (snapshot / "model-00001-of-00002.safetensors").symlink_to("../../blobs/completed-sha")
+    (blobs / "active-sha.worker.incomplete").write_bytes(b"x" * 20)
+
+    event = queue_module._cache_partial_progress_event(
+        hub.HubRef(repo_id="google/diffusiongemma-26B-A4B-it"),
+        {
+            "type": "model-plan",
+            "total_bytes": 100,
+            "files": [
+                {
+                    "path": "model-00001-of-00002.safetensors",
+                    "size": 30,
+                    "blob_id": "git-lfs-pointer-1",
+                },
+                {
+                    "path": "model-00002-of-00002.safetensors",
+                    "size": 70,
+                    "blob_id": "git-lfs-pointer-2",
+                },
+            ],
+        },
+    )
+
+    assert event["downloaded"] == 50
+    assert event["total"] == 100
+    assert event["percent"] == 50.0
+    assert event["cached_bytes"] == 30
+    assert event["untracked_partial_bytes"] == 20
+    assert event["path"] == "active-sha.worker.incomplete"
+
+
 def test_add_transfer_estimates_derives_speed_and_eta_from_cache_samples():
     event = {
         "type": "download-progress",
