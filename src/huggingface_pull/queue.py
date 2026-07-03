@@ -676,6 +676,7 @@ def _run_pull_in_process(
     last_activity_at = started_at
     last_partial_poll_at = 0.0
     last_partial_signature: tuple[int | None, int | None] | None = None
+    last_partial_sample: tuple[float, int] | None = None
     last_plan: dict[str, Any] | None = None
     last_progress: dict[str, Any] | None = None
     try:
@@ -698,6 +699,11 @@ def _run_pull_in_process(
                     last_partial_poll_at = now
                     partial_progress = _cache_partial_progress_event(ref, last_plan)
                     if partial_progress is not None:
+                        last_partial_sample = _add_transfer_estimates(
+                            partial_progress,
+                            previous_sample=last_partial_sample,
+                            sampled_at=now,
+                        )
                         signature = (
                             partial_progress.get("downloaded"),
                             partial_progress.get("total"),
@@ -815,6 +821,32 @@ def _cache_partial_progress_event(
     if largest_partial is not None:
         event["path"] = largest_partial[1]
     return event
+
+
+def _add_transfer_estimates(
+    event: dict[str, Any],
+    *,
+    previous_sample: tuple[float, int] | None,
+    sampled_at: float,
+) -> tuple[float, int] | None:
+    downloaded = event.get("downloaded")
+    if not isinstance(downloaded, int):
+        return previous_sample
+    if previous_sample is None:
+        return (sampled_at, downloaded)
+
+    previous_at, previous_downloaded = previous_sample
+    elapsed = sampled_at - previous_at
+    delta = downloaded - previous_downloaded
+    if elapsed <= 0 or delta <= 0:
+        return (sampled_at, downloaded)
+
+    speed = delta / elapsed
+    event["bytes_per_second"] = speed
+    total = event.get("total")
+    if isinstance(total, int) and total > 0:
+        event["eta_seconds"] = int(max(total - downloaded, 0) / speed)
+    return (sampled_at, downloaded)
 
 
 def _hf_cache_repo_dir(ref: HubRef) -> Path:

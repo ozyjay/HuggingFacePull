@@ -162,6 +162,25 @@ def test_cache_partial_progress_event_counts_unmatched_active_partials(monkeypat
     assert event["path"] == "sha256digest.worker.incomplete"
 
 
+def test_add_transfer_estimates_derives_speed_and_eta_from_cache_samples():
+    event = {
+        "type": "download-progress",
+        "downloaded": 60,
+        "total": 100,
+        "percent": 60.0,
+    }
+
+    sample = queue_module._add_transfer_estimates(
+        event,
+        previous_sample=(10.0, 20),
+        sampled_at=14.0,
+    )
+
+    assert sample == (14.0, 60)
+    assert event["bytes_per_second"] == 10.0
+    assert event["eta_seconds"] == 4
+
+
 def test_snapshot_includes_installed_models(monkeypatch, tmp_path):
     installed = [{"repo_id": "Qwen/Qwen3", "revision": "main", "size": 12}]
     monkeypatch.setattr(queue_module.hub, "installed_models", lambda library_dir: installed)

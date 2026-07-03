@@ -16,6 +16,17 @@ from .config import DEFAULT_ENDPOINT, default_max_workers, safe_repo_dir_name
 ProgressCallback = Callable[[dict[str, Any]], None]
 StopAfterFileCallback = Callable[[], bool]
 PROGRESS_EMIT_INTERVAL_SECONDS = 0.5
+MODEL_PAYLOAD_SUFFIXES = (
+    ".safetensors",
+    ".bin",
+    ".gguf",
+    ".onnx",
+    ".pt",
+    ".pth",
+    ".ckpt",
+    ".h5",
+    ".msgpack",
+)
 _LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
 HF_HUB_CACHE = os.environ.get(
     "HF_HUB_CACHE",
@@ -180,7 +191,7 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
         if refs:
             for revision, commit in refs.items():
                 snapshot = snapshots / commit
-                skip_reason = _cache_snapshot_skip_reason(snapshot)
+                skip_reason = _cache_snapshot_skip_reason(snapshot, require_model_payload=True)
                 if skip_reason is None:
                     cached.append(
                         {
@@ -195,7 +206,7 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
                     _log_cache_snapshot_skipped(repo_id, revision, snapshot, skip_reason)
             continue
         for snapshot in sorted(snapshots.iterdir()):
-            skip_reason = _cache_snapshot_skip_reason(snapshot)
+            skip_reason = _cache_snapshot_skip_reason(snapshot, require_model_payload=True)
             if skip_reason is None:
                 cached.append(
                     {
@@ -211,7 +222,11 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
     return cached
 
 
-def _cache_snapshot_skip_reason(snapshot: Path) -> dict[str, Any] | None:
+def _cache_snapshot_skip_reason(
+    snapshot: Path,
+    *,
+    require_model_payload: bool = False,
+) -> dict[str, Any] | None:
     if not snapshot.is_dir():
         return {"reason": "missing"}
 
@@ -230,7 +245,18 @@ def _cache_snapshot_skip_reason(snapshot: Path) -> dict[str, Any] | None:
             found_file = True
     if not found_file:
         return {"reason": "empty"}
+    if require_model_payload and not _has_model_payload(snapshot):
+        return {"reason": "missing_model_payload"}
     return None
+
+
+def _has_model_payload(snapshot: Path) -> bool:
+    for path in snapshot.rglob("*"):
+        if path.is_dir() or not path.exists():
+            continue
+        if path.name.endswith(MODEL_PAYLOAD_SUFFIXES):
+            return True
+    return False
 
 
 def _installed_metadata_skip_reason(metadata: dict[str, Any]) -> dict[str, Any] | None:

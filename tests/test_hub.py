@@ -153,6 +153,7 @@ def test_cached_hub_models_reads_huggingface_cache_repos(tmp_path, monkeypatch):
     ref.parent.mkdir(parents=True)
     ref.write_text("abc123", encoding="utf-8")
     (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model.safetensors").write_bytes(b"weights")
     (cache / "datasets--user--data" / "snapshots" / "def456").mkdir(parents=True)
     monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
 
@@ -266,6 +267,17 @@ def test_cached_hub_models_skips_snapshots_with_valid_metadata_but_missing_weigh
     ref.write_text("abc123", encoding="utf-8")
     (snapshot / "config.json").write_text("{}", encoding="utf-8")
     (snapshot / "model.safetensors").symlink_to("../../blobs/missing")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    assert hub.cached_hub_models() == []
+
+
+def test_cached_hub_models_skips_metadata_only_snapshots(tmp_path, monkeypatch):
+    cache = tmp_path / "hub"
+    model = cache / "models--Qwen--Qwen3"
+    snapshot = model / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
 
     assert hub.cached_hub_models() == []
