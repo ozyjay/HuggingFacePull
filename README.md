@@ -33,6 +33,25 @@ This project expects `python3` from the active `pyenv` version.
 
 The web UI binds to `127.0.0.1:8019` by default and opens the local browser.
 
+## Run the Desktop App
+
+The desktop app is an Electron wrapper around the same local FastAPI server and
+web UI.
+
+```bash
+npm install
+npm run desktop:start
+```
+
+Build an unpacked desktop app with:
+
+```bash
+npm run desktop:package
+```
+
+The Electron app looks for the repo `.venv` first, so run `./scripts/install.sh`
+before starting it locally.
+
 ## Pull a Repo
 
 ```bash

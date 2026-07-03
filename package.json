@@ -1,0 +1,18 @@
+{
+  "name": "huggingfacepull-desktop",
+  "version": "0.1.0",
+  "description": "Desktop wrapper for HuggingFacePull.",
+  "private": true,
+  "main": "desktop/main.cjs",
+  "author": "cpjjh",
+  "license": "MIT",
+  "scripts": {
+    "desktop:start": "electron .",
+    "desktop:package": "node desktop/package.cjs",
+    "desktop:check": "node --check desktop/main.cjs && node --check desktop/package.cjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.0.1",
+    "electron": "43.0.0"
+  }
+}

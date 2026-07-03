@@ -87,6 +87,56 @@ def test_add_creates_waiting_item(tmp_path):
     assert isinstance(item["updated_at"], float)
 
 
+def test_cache_partial_progress_event_reports_growing_incomplete_blob(monkeypatch, tmp_path):
+    monkeypatch.setattr(queue_module.hub, "HF_HUB_CACHE", str(tmp_path))
+    blobs = tmp_path / "models--Qwen--Qwen3" / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / "abc123.partial.incomplete").write_bytes(b"x" * 40)
+
+    event = queue_module._cache_partial_progress_event(
+        hub.HubRef(repo_id="Qwen/Qwen3"),
+        {
+            "type": "model-plan",
+            "total_bytes": 100,
+            "files": [{"path": "model.safetensors", "size": 100, "blob_id": "abc123"}],
+        },
+    )
+
+    assert event == {
+        "type": "download-progress",
+        "repo_id": "Qwen/Qwen3",
+        "revision": "main",
+        "downloaded": 40,
+        "total": 100,
+        "percent": 40.0,
+        "path": "model.safetensors",
+    }
+
+
+def test_cache_partial_progress_event_counts_completed_blobs(monkeypatch, tmp_path):
+    monkeypatch.setattr(queue_module.hub, "HF_HUB_CACHE", str(tmp_path))
+    blobs = tmp_path / "models--Qwen--Qwen3" / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / "complete").write_bytes(b"x" * 30)
+    (blobs / "partial.random.incomplete").write_bytes(b"x" * 20)
+
+    event = queue_module._cache_partial_progress_event(
+        hub.HubRef(repo_id="Qwen/Qwen3"),
+        {
+            "type": "model-plan",
+            "total_bytes": 100,
+            "files": [
+                {"path": "config.json", "size": 30, "blob_id": "complete"},
+                {"path": "model.safetensors", "size": 70, "blob_id": "partial"},
+            ],
+        },
+    )
+
+    assert event["downloaded"] == 50
+    assert event["total"] == 100
+    assert event["percent"] == 50.0
+
+
 def test_snapshot_includes_installed_models(monkeypatch, tmp_path):
     installed = [{"repo_id": "Qwen/Qwen3", "revision": "main", "size": 12}]
     monkeypatch.setattr(queue_module.hub, "installed_models", lambda library_dir: installed)

@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from . import hub
 from .app_logging import write_log
-from .config import DEFAULT_ENDPOINT, default_max_workers, default_stall_timeout_seconds
+from .config import DEFAULT_ENDPOINT, default_max_workers, default_stall_timeout_seconds, safe_repo_dir_name
 from .hub import DownloadStoppedAfterFile, HubRef, canonical_ref, pull_snapshot
 
 
@@ -19,6 +19,7 @@ PROGRESS_LOG_INTERVAL_SECONDS = 30.0
 PROGRESS_LOG_PERCENT_STEP = 5.0
 PROCESS_EVENT_POLL_SECONDS = 0.1
 STALLED_PROGRESS_SECONDS = 60.0
+PARTIAL_PROGRESS_POLL_SECONDS = 1.0
 
 
 class DownloadForceStopped(Exception):
@@ -673,6 +674,9 @@ def _run_pull_in_process(
     process.start()
     started_at = time.monotonic()
     last_activity_at = started_at
+    last_partial_poll_at = 0.0
+    last_partial_signature: tuple[int | None, int | None] | None = None
+    last_plan: dict[str, Any] | None = None
     last_progress: dict[str, Any] | None = None
     try:
         while True:
@@ -690,6 +694,20 @@ def _run_pull_in_process(
                         return
                     raise RuntimeError(f"download process exited with code {process.exitcode}")
                 now = time.monotonic()
+                if now - last_partial_poll_at >= PARTIAL_PROGRESS_POLL_SECONDS:
+                    last_partial_poll_at = now
+                    partial_progress = _cache_partial_progress_event(ref, last_plan)
+                    if partial_progress is not None:
+                        signature = (
+                            partial_progress.get("downloaded"),
+                            partial_progress.get("total"),
+                        )
+                        if signature != last_partial_signature:
+                            last_partial_signature = signature
+                            last_progress = partial_progress
+                            progress(partial_progress)
+                            last_activity_at = now
+                            continue
                 if now - last_activity_at >= stall_timeout_seconds:
                     _terminate_process(process)
                     raise RuntimeError(
@@ -706,6 +724,8 @@ def _run_pull_in_process(
             if kind == "progress":
                 if isinstance(payload, dict):
                     last_progress = payload
+                    if payload.get("type") == "model-plan":
+                        last_plan = payload
                 progress(payload)
                 continue
             if kind == "done":
@@ -720,6 +740,91 @@ def _run_pull_in_process(
     finally:
         if process.is_alive():
             _terminate_process(process)
+
+
+def _cache_partial_progress_event(
+    ref: HubRef,
+    last_progress: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(last_progress, dict):
+        return None
+    files = last_progress.get("files")
+    if not isinstance(files, list):
+        return None
+
+    repo_dir = _hf_cache_repo_dir(ref)
+    blobs_dir = repo_dir / "blobs"
+    if not blobs_dir.is_dir():
+        return None
+
+    total = last_progress.get("total_bytes") or last_progress.get("total")
+    if not isinstance(total, int):
+        sizes = [file.get("size") for file in files if isinstance(file, dict)]
+        total = sum(size for size in sizes if isinstance(size, int)) or None
+
+    downloaded = 0
+    largest_partial: tuple[int, str] | None = None
+    planned_blobs: set[str] = set()
+
+    for file in files:
+        if not isinstance(file, dict):
+            continue
+        blob_id = file.get("blob_id")
+        if not isinstance(blob_id, str) or not blob_id:
+            continue
+        planned_blobs.add(blob_id)
+        expected_size = file.get("size")
+        completed = _file_size(blobs_dir / blob_id)
+        if completed:
+            downloaded += min(completed, expected_size) if isinstance(expected_size, int) else completed
+            continue
+
+        partial_size = 0
+        for partial in blobs_dir.glob(f"{blob_id}*.incomplete"):
+            size = _file_size(partial)
+            partial_size += size
+            if largest_partial is None or size > largest_partial[0]:
+                largest_partial = (size, str(file.get("path") or partial.name))
+        if partial_size:
+            downloaded += min(partial_size, expected_size) if isinstance(expected_size, int) else partial_size
+
+    if not planned_blobs:
+        for partial in blobs_dir.glob("*.incomplete"):
+            size = _file_size(partial)
+            downloaded += size
+            if largest_partial is None or size > largest_partial[0]:
+                largest_partial = (size, partial.name)
+
+    if downloaded <= 0:
+        return None
+
+    percent = downloaded / total * 100 if isinstance(total, int) and total > 0 else None
+    event: dict[str, Any] = {
+        "type": "download-progress",
+        "repo_id": ref.repo_id,
+        "revision": ref.revision,
+        "downloaded": downloaded,
+        "total": total,
+        "percent": percent,
+    }
+    if largest_partial is not None:
+        event["path"] = largest_partial[1]
+    return event
+
+
+def _hf_cache_repo_dir(ref: HubRef) -> Path:
+    prefix = {
+        "dataset": "datasets",
+        "space": "spaces",
+    }.get(ref.repo_type, "models")
+    return Path(hub.HF_HUB_CACHE) / f"{prefix}--{safe_repo_dir_name(ref.repo_id)}"
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
 
 
 def _download_process_entry(

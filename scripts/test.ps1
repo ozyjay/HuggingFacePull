@@ -27,6 +27,14 @@ if (-not $SkipNode) {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if ($node) {
         Invoke-Checked "node" "--check" (Join-Path $root "src/huggingface_pull/web/app.js")
+        $desktopMain = Join-Path $root "desktop/main.cjs"
+        if (Test-Path $desktopMain) {
+            Invoke-Checked "node" "--check" $desktopMain
+        }
+        $desktopPackage = Join-Path $root "desktop/package.cjs"
+        if (Test-Path $desktopPackage) {
+            Invoke-Checked "node" "--check" $desktopPackage
+        }
     } else {
         Write-Host "Skipping JavaScript syntax check because node is not installed."
     }

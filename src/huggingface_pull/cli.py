@@ -55,6 +55,11 @@ def build_web_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8019)
     parser.add_argument("--library-dir", type=Path, default=default_library_dir())
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Start the local web server without opening the system browser.",
+    )
     return parser
 
 
@@ -145,10 +150,11 @@ def run_web(argv: list[str] | None = None) -> int:
         endpoint=DEFAULT_ENDPOINT,
     )
 
-    def open_browser() -> None:
-        webbrowser.open(browser_url)
+    if not args.no_browser:
+        def open_browser() -> None:
+            webbrowser.open(browser_url)
 
-    app.router.on_startup.append(open_browser)
+        app.router.on_startup.append(open_browser)
     config = uvicorn.Config(app, host=args.host, port=args.port, log_level="warning")
     server = uvicorn.Server(config)
     server.run()
