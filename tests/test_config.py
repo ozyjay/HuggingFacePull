@@ -93,8 +93,15 @@ def test_queue_request_defaults_are_independent_lists():
     assert first.revision == "main"
     assert first.repo_type == "model"
     assert first.local_dir is None
+    assert first.xet_enabled is False
     assert second.allow_patterns == []
     assert second.ignore_patterns == []
+
+
+def test_queue_request_accepts_xet_enabled():
+    request = QueueRequest(repo_id="Qwen/Qwen3", xet_enabled=True)
+
+    assert request.xet_enabled is True
 
 
 def test_queue_request_strips_repo_id_surrounding_whitespace():

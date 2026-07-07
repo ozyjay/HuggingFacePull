@@ -34,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument("--max-workers", type=int, default=default_max_workers())
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--xet",
+        action="store_true",
+        help="Enable Hugging Face Xet transfers for this pull. Non-Xet HTTP is the default.",
+    )
     return parser
 
 
@@ -123,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_type=args.repo_type,
             allow_patterns=args.allow,
             ignore_patterns=args.ignore,
+            xet_enabled=args.xet,
         )
         snapshot_path = pull_snapshot(
             ref,

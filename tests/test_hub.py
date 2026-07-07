@@ -53,7 +53,7 @@ def test_canonical_ref_normalises_revision_repo_type_and_filters():
 
     assert (
         hub.canonical_ref(ref)
-        == "model:Qwen/Qwen3-Embedding-0.6B@main?allow=*.json,*.safetensors&ignore=*.bin,*.h5"
+        == "model:Qwen/Qwen3-Embedding-0.6B@main?allow=*.json,*.safetensors&ignore=*.bin,*.h5&xet=0"
     )
 
 
@@ -570,6 +570,7 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
         "snapshot_path": str(target),
         "size": 7,
         "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
+        "xet_enabled": False,
     }
     assert sorted(path.name for path in marker.parent.iterdir()) == [".huggingfacepull.json"]
     assert events == [
@@ -719,7 +720,7 @@ def test_pull_snapshot_passes_none_for_empty_snapshot_patterns(monkeypatch, tmp_
     assert Path(calls[0]["cache_dir"]) == Path(hub.HF_HUB_CACHE)
 
 
-def test_pull_snapshot_disables_xet_before_lazy_hub_import(monkeypatch, tmp_path):
+def test_pull_snapshot_disables_xet_by_default_before_lazy_hub_import(monkeypatch, tmp_path):
     seen = []
 
     def fake_snapshot_download(**kwargs):
@@ -742,7 +743,7 @@ def test_pull_snapshot_disables_xet_before_lazy_hub_import(monkeypatch, tmp_path
     assert os.environ.get("HF_HUB_DISABLE_XET") == "1"
 
 
-def test_pull_snapshot_overrides_existing_xet_setting(monkeypatch, tmp_path):
+def test_pull_snapshot_overrides_existing_xet_setting_by_default(monkeypatch, tmp_path):
     seen = []
 
     def fake_snapshot_download(**kwargs):
@@ -763,6 +764,29 @@ def test_pull_snapshot_overrides_existing_xet_setting(monkeypatch, tmp_path):
 
     assert seen == ["1"]
     assert os.environ.get("HF_HUB_DISABLE_XET") == "1"
+
+
+def test_pull_snapshot_can_enable_xet(monkeypatch, tmp_path):
+    seen = []
+
+    def fake_snapshot_download(**kwargs):
+        seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "weights.bin").write_bytes(b"data")
+        return str(local_dir)
+
+    monkeypatch.setenv("HF_HUB_DISABLE_XET", "1")
+    install_fake_hub(
+        monkeypatch,
+        [{"path": "weights.bin", "size": 4, "blob_id": "weights"}],
+        fake_snapshot_download,
+    )
+
+    hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3", xet_enabled=True), library_dir=tmp_path)
+
+    assert seen == [None]
+    assert os.environ.get("HF_HUB_DISABLE_XET") is None
 
 
 def test_pull_snapshot_emits_aggregate_byte_progress_from_snapshot_tqdm(monkeypatch, tmp_path):

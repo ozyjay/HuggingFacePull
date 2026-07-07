@@ -67,6 +67,11 @@
               <label for="ignorePatternsInput">Ignore patterns</label>
               <input id="ignorePatternsInput" name="ignore_patterns" autocomplete="off" placeholder="*.msgpack, *.h5">
 
+              <label class="check-row" title="Use Hugging Face Xet transfers for very large repos that require Xet. Plain HTTP is safer for most downloads.">
+                <input id="xetEnabledInput" type="checkbox">
+                Use Xet transfer for this download
+              </label>
+
               <div class="button-row">
                 <button type="submit">Add to queue</button>
                 <button type="button" id="inspectFiles" class="secondary">Inspect files</button>

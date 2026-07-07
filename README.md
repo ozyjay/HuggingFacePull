@@ -75,6 +75,12 @@ HUGGINGFACE_PULL_MAX_WORKERS=1 hfpull Qwen/Qwen3-Embedding-0.6B --allow "*.json"
 hfpull Qwen/Qwen3-Embedding-0.6B --allow "*.json" --allow "*.safetensors" --max-workers 1
 ```
 
+Enable Xet for a model that requires it with:
+
+```bash
+hfpull huge-org/huge-model --xet
+```
+
 Use `--dry-run` to verify the target path without downloading files:
 
 ```bash
@@ -114,8 +120,10 @@ with TemporaryDirectory(prefix="hfpull-smoke-") as temp_dir:
     )
 ```
 
-HuggingFacePull forces `HF_HUB_DISABLE_XET=1` during transfers. Xet has been tried;
-plain HTTP/non-Xet mode is the reliable fallback for this app.
+HuggingFacePull uses plain HTTP/non-Xet transfers by default because that is
+the reliable fallback for most downloads. For very large repos that require
+Xet, tick **Use Xet transfer for this download** in the desktop/web UI or pass
+`--xet` on the CLI.
 
 The web launcher logs these diagnostics before the app starts:
 

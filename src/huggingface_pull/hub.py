@@ -48,6 +48,17 @@ def force_disable_xet() -> None:
     os.environ.pop("HF_XET_SHARD_CACHE_SIZE_LIMIT", None)
 
 
+def enable_xet() -> None:
+    os.environ.pop("HF_HUB_DISABLE_XET", None)
+
+
+def configure_xet(enabled: bool) -> None:
+    if enabled:
+        enable_xet()
+    else:
+        force_disable_xet()
+
+
 force_disable_xet()
 
 
@@ -62,12 +73,14 @@ class HubRef:
     repo_type: str = "model"
     allow_patterns: tuple[str, ...] | list[str] = dataclasses.field(default_factory=tuple)
     ignore_patterns: tuple[str, ...] | list[str] = dataclasses.field(default_factory=tuple)
+    xet_enabled: bool = False
 
 
 def canonical_ref(ref: HubRef) -> str:
     allow = ",".join(sorted(ref.allow_patterns))
     ignore = ",".join(sorted(ref.ignore_patterns))
-    return f"{ref.repo_type}:{ref.repo_id}@{ref.revision}?allow={allow}&ignore={ignore}"
+    xet = "1" if ref.xet_enabled else "0"
+    return f"{ref.repo_type}:{ref.repo_id}@{ref.revision}?allow={allow}&ignore={ignore}&xet={xet}"
 
 
 def safe_revision_dir_name(revision: str) -> str:
@@ -650,7 +663,7 @@ def pull_snapshot(
             progress({"type": "model-complete", "repo_id": ref.repo_id, "dry_run": True})
         return metadata_dir
 
-    force_disable_xet()
+    configure_xet(ref.xet_enabled)
     api = _hf_api_class()(endpoint=endpoint)
     info = api.model_info(
         ref.repo_id,
@@ -699,8 +712,11 @@ def pull_snapshot(
     if stop_after_file is not None and stop_after_file():
         raise DownloadStoppedAfterFile
 
-    if os.environ.get("HF_HUB_DISABLE_XET") != "1":
-        raise RuntimeError("HF_HUB_DISABLE_XET must remain set to 1 during downloads")
+    if ref.xet_enabled:
+        if os.environ.get("HF_HUB_DISABLE_XET") == "1":
+            raise RuntimeError("HF_HUB_DISABLE_XET must be unset when Xet is enabled")
+    elif os.environ.get("HF_HUB_DISABLE_XET") != "1":
+        raise RuntimeError("HF_HUB_DISABLE_XET must remain set to 1 when Xet is disabled")
 
     skip_reason = _snapshot_integrity_skip_reason(snapshot_path, files)
     if skip_reason is not None:
@@ -723,6 +739,7 @@ def pull_snapshot(
         "snapshot_path": str(snapshot_path),
         "size": directory_size(snapshot_path),
         "files": files,
+        "xet_enabled": ref.xet_enabled,
     }
     marker.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -773,7 +790,6 @@ def _local_file_size(path: Path) -> int:
 
 
 def _hf_api_class() -> Any:
-    force_disable_xet()
     if HfApi is not None:
         return HfApi
     from huggingface_hub import HfApi as imported_hf_api
@@ -782,7 +798,6 @@ def _hf_api_class() -> Any:
 
 
 def _snapshot_download_func() -> Any:
-    force_disable_xet()
     if snapshot_download is not None:
         return snapshot_download
     from huggingface_hub import snapshot_download as imported_snapshot_download
