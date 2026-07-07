@@ -911,13 +911,13 @@ def _progress_tqdm_class(
                 raise DownloadStoppedAfterFile
 
         def _emit_download_progress(self, *, force: bool = False) -> None:
-            if getattr(self, "unit", None) != "B":
-                return
             downloaded = _numeric_progress_value(getattr(self, "n", None))
             total = _numeric_progress_value(getattr(self, "total", None))
             if downloaded is None and total is None:
                 return
-            signature = (downloaded, total)
+            unit = getattr(self, "unit", None)
+            desc = getattr(self, "desc", None)
+            signature = (unit, desc, downloaded, total)
             if signature == getattr(self, "_hfp_last_signature", None):
                 return
             now = time.monotonic()
@@ -938,17 +938,30 @@ def _progress_tqdm_class(
                 if downloaded is not None and total is not None and total > 0
                 else None
             )
-            progress(
-                {
-                    "type": "download-progress",
-                    "repo_id": repo_id,
-                    "downloaded": downloaded,
-                    "total": total,
-                    "percent": percent,
-                    "bytes_per_second": speed,
-                    "eta_seconds": eta,
-                }
-            )
+            if unit == "B":
+                progress(
+                    {
+                        "type": "download-progress",
+                        "repo_id": repo_id,
+                        "downloaded": downloaded,
+                        "total": total,
+                        "percent": percent,
+                        "bytes_per_second": speed,
+                        "eta_seconds": eta,
+                    }
+                )
+            else:
+                progress(
+                    {
+                        "type": "fetch-progress",
+                        "repo_id": repo_id,
+                        "downloaded": downloaded,
+                        "total": total,
+                        "percent": percent,
+                        "unit": unit,
+                        "description": desc,
+                    }
+                )
             self._hfp_last_emit_at = now
             self._hfp_last_signature = signature
 
