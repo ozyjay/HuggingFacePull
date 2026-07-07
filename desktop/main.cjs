@@ -9,6 +9,7 @@ const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8019;
 const SERVER_READY_TIMEOUT_MS = 30000;
 const SERVER_POLL_INTERVAL_MS = 250;
+const PYTHON_WEB_LAUNCHER = "import sys; from huggingface_pull.cli import run_web; raise SystemExit(run_web(sys.argv[1:]))";
 
 let backendProcess = null;
 let mainWindow = null;
@@ -26,22 +27,80 @@ function executableExists(filePath) {
   }
 }
 
+function commandExists(command) {
+  return !command.includes(path.sep) || executableExists(command);
+}
+
+function venvBinDir(venvDir) {
+  return path.join(venvDir, process.platform === "win32" ? "Scripts" : "bin");
+}
+
+function venvScript(venvDir, scriptName) {
+  const executableName = process.platform === "win32" ? `${scriptName}.exe` : scriptName;
+  return path.join(venvBinDir(venvDir), executableName);
+}
+
+function venvPython(venvDir) {
+  const executableName = process.platform === "win32" ? "python.exe" : "python";
+  return path.join(venvBinDir(venvDir), executableName);
+}
+
+function pythonBackendCandidate(venvDir, cwd) {
+  const python = venvPython(venvDir);
+  if (!executableExists(python)) {
+    return null;
+  }
+  return {
+    command: python,
+    args: ["-c", PYTHON_WEB_LAUNCHER],
+    cwd,
+    label: python,
+  };
+}
+
+function scriptBackendCandidate(venvDir, cwd) {
+  const command = venvScript(venvDir, "hfpull-web");
+  if (!executableExists(command)) {
+    return null;
+  }
+  return {
+    command,
+    args: [],
+    cwd,
+    label: command,
+  };
+}
+
+function environmentBackendCandidate(root) {
+  if (!process.env.HFPULL_BACKEND_COMMAND) {
+    return null;
+  }
+  return {
+    command: process.env.HFPULL_BACKEND_COMMAND,
+    args: [],
+    cwd: root,
+    label: process.env.HFPULL_BACKEND_COMMAND,
+  };
+}
+
 function backendCandidates(root) {
-  const scriptName = process.platform === "win32" ? "hfpull-web.exe" : "hfpull-web";
+  const packagedBackend = path.join(process.resourcesPath || root, "backend");
+  const packagedVenv = path.join(packagedBackend, ".venv");
+  const devVenv = path.join(root, ".venv");
+
   return [
-    path.join(root, ".venv", process.platform === "win32" ? "Scripts" : "bin", scriptName),
-    path.join(process.resourcesPath || root, "backend", ".venv", process.platform === "win32" ? "Scripts" : "bin", scriptName),
-    "hfpull-web",
-  ];
+    app.isPackaged ? pythonBackendCandidate(packagedVenv, packagedBackend) : null,
+    !app.isPackaged ? scriptBackendCandidate(devVenv, root) : null,
+    scriptBackendCandidate(packagedVenv, packagedBackend),
+    scriptBackendCandidate(devVenv, root),
+    environmentBackendCandidate(root),
+    { command: "hfpull-web", args: [], cwd: root, label: "hfpull-web" },
+  ].filter(Boolean);
 }
 
 function findBackendCommand(root) {
-  if (process.env.HFPULL_BACKEND_COMMAND) {
-    return process.env.HFPULL_BACKEND_COMMAND;
-  }
-
   for (const candidate of backendCandidates(root)) {
-    if (!candidate.includes(path.sep) || executableExists(candidate)) {
+    if (commandExists(candidate.command)) {
       return candidate;
     }
   }
@@ -158,12 +217,12 @@ async function backendPort() {
 }
 
 function startBackend(root, port) {
-  const command = findBackendCommand(root);
-  if (!command) {
-    throw new Error("Could not find hfpull-web. Run ./scripts/install.sh first.");
+  const backend = findBackendCommand(root);
+  if (!backend) {
+    throw new Error("Could not find hfpull-web. Run ./scripts/install.sh first, or rebuild the desktop package.");
   }
 
-  const args = ["--host", HOST, "--port", String(port), "--no-browser"];
+  const args = [...backend.args, "--host", HOST, "--port", String(port), "--no-browser"];
   const env = {
     ...process.env,
     HF_HUB_DISABLE_XET: "1",
@@ -172,8 +231,8 @@ function startBackend(root, port) {
   delete env.HF_XET_CHUNK_CACHE_SIZE_BYTES;
   delete env.HF_XET_SHARD_CACHE_SIZE_LIMIT;
 
-  backendProcess = spawn(command, args, {
-    cwd: root,
+  backendProcess = spawn(backend.command, args, {
+    cwd: backend.cwd,
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -183,6 +242,9 @@ function startBackend(root, port) {
   });
   backendProcess.stderr.on("data", (chunk) => {
     process.stderr.write(`[hfpull-web] ${chunk}`);
+  });
+  backendProcess.on("error", (error) => {
+    process.stderr.write(`[hfpull-web] failed to start ${backend.label}: ${error.message}\n`);
   });
   backendProcess.on("exit", (code, signal) => {
     backendProcess = null;

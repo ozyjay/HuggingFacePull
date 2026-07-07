@@ -30,6 +30,16 @@ def test_default_log_file_expands_user_from_environment(monkeypatch, tmp_path):
     assert default_log_file() == tmp_path / "hf.log"
 
 
+
+
+def test_default_log_file_uses_xdg_state_home_on_linux(monkeypatch, tmp_path):
+    monkeypatch.delenv("HUGGINGFACE_PULL_LOG_FILE", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr("huggingface_pull.config.sys.platform", "linux")
+
+    assert default_log_file() == tmp_path / "state" / "HuggingFacePull" / "app.log"
+
+
 def test_test_suite_redirects_default_log_file_away_from_user_logs():
     configured = os.environ.get("HUGGINGFACE_PULL_LOG_FILE", "")
 

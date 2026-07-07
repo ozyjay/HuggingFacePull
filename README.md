@@ -43,14 +43,23 @@ npm install
 npm run desktop:start
 ```
 
-Build an unpacked desktop app with:
+Build a standalone Fedora/Linux x64 desktop folder with:
 
 ```bash
 npm run desktop:package
 ```
 
-The Electron app looks for the repo `.venv` first, so run `./scripts/install.sh`
-before starting it locally.
+The packaged app is written to `out/HuggingFacePull-linux-x64/` and can be run
+from that folder with:
+
+```bash
+./out/HuggingFacePull-linux-x64/huggingfacepull
+```
+
+Packaging creates `build/backend/.venv`, installs the runtime Python backend
+there, and copies it into `resources/backend` so the packaged app does not need
+the repo checkout or a manually prepared `.venv`. Local development still uses
+the repo `.venv`, so run `./scripts/install.sh` before `npm run desktop:start`.
 
 ## Pull a Repo
 

@@ -34,11 +34,18 @@ def test_workflow_scripts_cover_core_workflows():
     assert package["scripts"]["desktop:package"] == "node desktop/package.cjs"
     assert "@electron/packager" in package["devDependencies"]
     assert "executableName: \"huggingfacepull\"" in desktop_package
+    assert "buildBackend" in desktop_package
+    assert "extraResource: backendDir" in desktop_package
+    assert 'platform: "linux"' in desktop_package
+    assert 'arch: "x64"' in desktop_package
     assert "/^\\/\\.venv($|\\/)/" in desktop_package
+    assert "/^\\/build($|\\/)/" in desktop_package
     assert "/^\\/node_modules($|\\/)/" in desktop_package
     assert "BrowserWindow" in desktop_main
     assert "--no-browser" in desktop_main
     assert "DEFAULT_PORT = 8019" in desktop_main
+    assert "process.resourcesPath" in desktop_main
+    assert "PYTHON_WEB_LAUNCHER" in desktop_main
     assert "probeExistingServer" in desktop_main
     assert "HFPULL_DESKTOP_PORT" in desktop_main
     assert "portAcceptsConnections" in desktop_main

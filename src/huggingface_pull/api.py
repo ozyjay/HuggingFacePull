@@ -39,7 +39,7 @@ def create_app(
     app.state.queue = queue
 
     @app.get("/api/state")
-    def state() -> dict[str, Any]:
+    async def state() -> dict[str, Any]:
         snapshot = queue.snapshot()
         snapshot["cached_models"] = cached_hub_models()
         snapshot["partial_cached_models"] = partial_cached_hub_models()
@@ -47,11 +47,11 @@ def create_app(
         return snapshot
 
     @app.get("/api/search")
-    def search(q: str = "") -> dict[str, Any]:
+    async def search(q: str = "") -> dict[str, Any]:
         return search_models(q, endpoint=endpoint, token=token)
 
     @app.get("/api/models/{repo_id:path}/files")
-    def files(
+    async def files(
         repo_id: str,
         revision: str = "main",
         repo_type: str = "model",
@@ -68,7 +68,7 @@ def create_app(
         )
 
     @app.post("/api/queue")
-    def add(payload: QueueRequest) -> dict[str, Any]:
+    async def add(payload: QueueRequest) -> dict[str, Any]:
         requested = payload.model_dump()
         for installed in installed_models(queue.library_dir):
             if (
@@ -80,21 +80,21 @@ def create_app(
         return queue.add(payload.model_dump())
 
     @app.post("/api/start")
-    def start() -> dict[str, Any]:
+    async def start() -> dict[str, Any]:
         queue.start()
         return queue.snapshot()
 
     @app.post("/api/pause")
-    def pause() -> dict[str, Any]:
+    async def pause() -> dict[str, Any]:
         queue.pause_after_current()
         return queue.snapshot()
 
     @app.post("/api/stop-after-file")
-    def stop_after_file() -> dict[str, Any]:
+    async def stop_after_file() -> dict[str, Any]:
         return queue.stop_after_current_file()
 
     @app.post("/api/retry/{item_id}")
-    def retry(item_id: str) -> dict[str, Any]:
+    async def retry(item_id: str) -> dict[str, Any]:
         try:
             return queue.retry(item_id)
         except KeyError as error:
@@ -103,7 +103,7 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/api/remove/{item_id}")
-    def remove(item_id: str) -> dict[str, bool]:
+    async def remove(item_id: str) -> dict[str, bool]:
         try:
             queue.remove(item_id)
         except KeyError as error:
@@ -113,7 +113,7 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/installed/remove")
-    def remove_installed(payload: InstalledRemoveRequest) -> dict[str, bool]:
+    async def remove_installed(payload: InstalledRemoveRequest) -> dict[str, bool]:
         try:
             remove_installed_model(queue.library_dir, HubRef(**payload.model_dump()))
         except KeyError as error:
@@ -121,11 +121,11 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/cleanup/scan")
-    def cleanup_scan(payload: CleanupRequest = CleanupRequest()) -> dict[str, Any]:
+    async def cleanup_scan(payload: CleanupRequest = CleanupRequest()) -> dict[str, Any]:
         return cleanup_library(queue.library_dir, delete=False, **payload.model_dump())
 
     @app.post("/api/cleanup/delete")
-    def cleanup_delete(payload: CleanupRequest = CleanupRequest()) -> dict[str, Any]:
+    async def cleanup_delete(payload: CleanupRequest = CleanupRequest()) -> dict[str, Any]:
         return cleanup_library(queue.library_dir, delete=True, **payload.model_dump())
 
     if WEB_DIR.is_dir():
