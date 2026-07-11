@@ -99,6 +99,21 @@
       </section>
 
       <aside class="side-rail" aria-label="Details and maintenance">
+        <section id="desktopSettings" class="panel" aria-labelledby="settingsTitle" hidden>
+          <div class="panel-heading">
+            <h2 id="settingsTitle">Storage</h2>
+            <span class="muted">Desktop setting</span>
+          </div>
+          <div class="stack-form">
+            <div>
+              <label>Hugging Face cache directory</label>
+              <div id="cacheDirectory" class="path-value">Loading...</div>
+            </div>
+            <button type="button" id="selectCacheDirectory" class="secondary">Choose folder…</button>
+            <small>Changing this folder restarts the app. Existing cached models are not moved.</small>
+          </div>
+        </section>
+
         <section class="panel detail-panel" aria-labelledby="detailTitle">
           <div class="panel-heading">
             <h2 id="detailTitle">Detail</h2>

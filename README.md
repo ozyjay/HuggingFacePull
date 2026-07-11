@@ -56,6 +56,20 @@ from that folder with:
 ./out/HuggingFacePull-linux-x64/huggingfacepull
 ```
 
+On Fedora, build a normal installable RPM (requires the `rpm-build` package):
+
+```bash
+sudo dnf install rpm-build
+npm run desktop:package:rpm
+sudo dnf install ./out/huggingfacepull-0.1.0-1.*.x86_64.rpm
+```
+
+The RPM installs the bundled app under `/opt/huggingfacepull`, adds a command at
+`/usr/bin/huggingfacepull`, and registers HuggingFacePull in the desktop app menu.
+In the desktop app, use **Storage → Choose folder…** to select the Hugging Face
+cache directory. The selection is remembered per user and takes effect after the
+automatic app restart; existing cache contents are not moved.
+
 Packaging creates `build/backend/.venv`, installs the runtime Python backend
 there, and copies it into `resources/backend` so the packaged app does not need
 the repo checkout or a manually prepared `.venv`. Local development still uses

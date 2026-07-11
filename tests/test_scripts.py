@@ -11,6 +11,8 @@ def test_workflow_scripts_exist():
     assert (ROOT / "package.json").is_file()
     assert (ROOT / "desktop" / "main.cjs").is_file()
     assert (ROOT / "desktop" / "package.cjs").is_file()
+    assert (ROOT / "desktop" / "package-rpm.cjs").is_file()
+    assert (ROOT / "desktop" / "preload.cjs").is_file()
     assert (scripts / "install.sh").is_file()
     assert (scripts / "setup.ps1").is_file()
     assert (scripts / "test.ps1").is_file()
@@ -32,6 +34,7 @@ def test_workflow_scripts_cover_core_workflows():
     assert package["main"] == "desktop/main.cjs"
     assert package["scripts"]["desktop:start"] == "electron ."
     assert package["scripts"]["desktop:package"] == "node desktop/package.cjs"
+    assert package["scripts"]["desktop:package:rpm"] == "node desktop/package-rpm.cjs"
     assert "@electron/packager" in package["devDependencies"]
     assert "executableName: \"huggingfacepull\"" in desktop_package
     assert "buildBackend" in desktop_package

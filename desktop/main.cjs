@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -13,6 +13,28 @@ const PYTHON_WEB_LAUNCHER = "import sys; from huggingface_pull.cli import run_we
 
 let backendProcess = null;
 let mainWindow = null;
+
+function settingsPath() {
+  return path.join(app.getPath("userData"), "settings.json");
+}
+
+function readSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeSettings(settings) {
+  fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
+  fs.writeFileSync(settingsPath(), `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+}
+
+function configuredCacheDirectory() {
+  const configured = readSettings().hfHubCache;
+  return typeof configured === "string" && configured.trim() ? configured : null;
+}
 
 function projectRoot() {
   return path.resolve(__dirname, "..");
@@ -227,6 +249,10 @@ function startBackend(root, port) {
     ...process.env,
     HF_HUB_DISABLE_XET: "1",
   };
+  const cacheDirectory = configuredCacheDirectory();
+  if (cacheDirectory) {
+    env.HF_HUB_CACHE = cacheDirectory;
+  }
   delete env.HF_XET_HIGH_PERFORMANCE;
   delete env.HF_XET_CHUNK_CACHE_SIZE_BYTES;
   delete env.HF_XET_SHARD_CACHE_SIZE_LIMIT;
@@ -286,6 +312,7 @@ function createWindow(appUrl) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
@@ -307,6 +334,28 @@ function createWindow(appUrl) {
 
   mainWindow.loadURL(appUrl);
 }
+
+ipcMain.handle("select-hf-cache-directory", async () => {
+  const current = configuredCacheDirectory();
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Select Hugging Face cache directory",
+    defaultPath: current || app.getPath("home"),
+    buttonLabel: "Use this folder",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return { changed: false, path: current };
+  }
+
+  const selected = path.resolve(result.filePaths[0]);
+  writeSettings({ ...readSettings(), hfHubCache: selected });
+  return { changed: selected !== current, path: selected };
+});
+
+ipcMain.handle("restart-for-cache-directory", () => {
+  app.relaunch();
+  app.quit();
+});
 
 async function main() {
   const root = projectRoot();

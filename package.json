@@ -9,7 +9,8 @@
   "scripts": {
     "desktop:start": "electron .",
     "desktop:package": "node desktop/package.cjs",
-    "desktop:check": "node --check desktop/main.cjs && node --check desktop/package.cjs"
+    "desktop:package:rpm": "node desktop/package-rpm.cjs",
+    "desktop:check": "node --check desktop/main.cjs && node --check desktop/preload.cjs && node --check desktop/package.cjs && node --check desktop/package-rpm.cjs"
   },
   "devDependencies": {
     "@electron/packager": "20.0.1",

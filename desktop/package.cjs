@@ -39,6 +39,14 @@ function buildBackend() {
   const python = process.env.PYTHON || "python3";
   run(python, ["-m", "venv", backendVenv]);
   run(venvPython(), ["-m", "pip", "install", "."]);
+
+  // Some Fedora Python builds create lib64 as an absolute link back into the
+  // build directory. Keep the packaged virtual environment relocatable.
+  const lib64 = path.join(backendVenv, "lib64");
+  if (fs.existsSync(lib64) || fs.lstatSync(lib64, { throwIfNoEntry: false })) {
+    fs.rmSync(lib64, { force: true });
+    fs.symlinkSync("lib", lib64, "dir");
+  }
 }
 
 async function main() {
@@ -74,6 +82,26 @@ async function main() {
   });
 
   for (const appPath of appPaths) {
+    const packagedVenv = path.join(appPath, "resources", "backend", ".venv");
+    const packagedLib64 = path.join(packagedVenv, "lib64");
+    if (fs.existsSync(packagedLib64) || fs.lstatSync(packagedLib64, { throwIfNoEntry: false })) {
+      fs.rmSync(packagedLib64, { force: true });
+      fs.symlinkSync("lib", packagedLib64, "dir");
+    }
+    const packagedBin = path.join(packagedVenv, "bin");
+    for (const name of fs.readdirSync(packagedBin)) {
+      if (name !== "python" && name !== "python3" && !name.startsWith("python3.") && name !== "𝜋thon") {
+        continue;
+      }
+      const executable = path.join(packagedBin, name);
+      if (name === "python3") {
+        fs.rmSync(executable, { force: true });
+        fs.symlinkSync("/usr/bin/python3", executable);
+      } else {
+        fs.rmSync(executable, { force: true });
+        fs.symlinkSync("python3", executable);
+      }
+    }
     console.log(appPath);
   }
 }

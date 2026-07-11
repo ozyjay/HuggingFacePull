@@ -39,6 +39,7 @@ def test_state_endpoint_returns_snapshot(tmp_path):
     data = response.json()
     assert data["items"] == []
     assert data["library_dir"] == str(tmp_path)
+    assert isinstance(data["hf_hub_cache"], str)
     assert isinstance(data["server_pid"], int)
 
 

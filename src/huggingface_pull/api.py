@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import DEFAULT_ENDPOINT, default_library_dir
 from .hub import (
+    HF_HUB_CACHE,
     HubRef,
     cached_hub_models,
     cleanup_library,
@@ -44,6 +45,7 @@ def create_app(
         snapshot["cached_models"] = cached_hub_models()
         snapshot["partial_cached_models"] = partial_cached_hub_models()
         snapshot["server_pid"] = os.getpid()
+        snapshot["hf_hub_cache"] = str(Path(HF_HUB_CACHE).expanduser())
         return snapshot
 
     @app.get("/api/search")
