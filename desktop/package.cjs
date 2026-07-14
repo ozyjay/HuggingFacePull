@@ -38,6 +38,7 @@ function buildBackend() {
 
   const python = process.env.PYTHON || "python3";
   run(python, ["-m", "venv", backendVenv]);
+  run(venvPython(), ["-m", "pip", "install", "--upgrade", "pip"]);
   run(venvPython(), ["-m", "pip", "install", "."]);
 
   // Some Fedora Python builds create lib64 as an absolute link back into the

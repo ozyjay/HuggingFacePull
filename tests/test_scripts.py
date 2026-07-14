@@ -43,6 +43,10 @@ def test_workflow_scripts_cover_core_workflows():
     assert "extraResource: backendDir" in desktop_package
     assert 'platform: "linux"' in desktop_package
     assert 'arch: "x64"' in desktop_package
+    desktop_pip_upgrade = 'run(venvPython(), ["-m", "pip", "install", "--upgrade", "pip"]);'
+    desktop_backend_install = 'run(venvPython(), ["-m", "pip", "install", "."]);'
+    assert desktop_pip_upgrade in desktop_package
+    assert desktop_package.index(desktop_pip_upgrade) < desktop_package.index(desktop_backend_install)
     assert "/^\\/\\.venv($|\\/)/" in desktop_package
     assert "/^\\/build($|\\/)/" in desktop_package
     assert "/^\\/node_modules($|\\/)/" in desktop_package
@@ -62,12 +66,15 @@ def test_workflow_scripts_cover_core_workflows():
     assert "debian" in install
     assert "macos" in install
     assert "python3-venv" in install
+    assert 'pip install --upgrade pip' in install
     assert 'pip install -e "$install_target"' in install
     assert "npm run desktop:package:rpm" in package_install_fedora
     assert "--install-build-deps" in package_install_fedora
     assert 'run "${DNF[@]}" "${install_args[@]}"' in package_install_fedora
     assert 'Invoke-Checked "python3" "-m" "venv" ".venv"' in setup
+    assert 'Invoke-Checked $python "-m" "pip" "install" "--upgrade" "pip"' in setup
     assert '".[dev]"' in setup
+    assert 'Invoke-Checked $python "-m" "pip" "install" "--upgrade" "pip"' in test
     assert "pytest" in test
     assert "py_compile" in test
     assert "desktop/main.cjs" in test

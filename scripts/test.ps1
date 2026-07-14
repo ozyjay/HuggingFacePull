@@ -11,6 +11,7 @@ $python = Get-VenvPython
 Set-Location $root
 
 if ($Install) {
+    Invoke-Checked $python "-m" "pip" "install" "--upgrade" "pip"
     Invoke-Checked $python "-m" "pip" "install" "-e" ".[dev]"
 }
 
