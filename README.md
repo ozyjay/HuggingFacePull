@@ -56,10 +56,28 @@ from that folder with:
 ./out/HuggingFacePull-linux-x64/huggingfacepull
 ```
 
-On Fedora, build a normal installable RPM (requires the `rpm-build` package):
+On Fedora, build and install the desktop RPM in one step:
+
+```bash
+./scripts/package-install-fedora.sh
+```
+
+On a new Fedora development machine, the script can install its build tools too:
+
+```bash
+./scripts/package-install-fedora.sh --install-build-deps
+```
+
+Pass `--yes` to make the `dnf` operations non-interactive. The script runs
+`npm ci`, builds the bundled desktop app and backend, creates the RPM, and then
+installs (or reinstalls) that exact artifact. To reuse an existing
+`node_modules` directory, pass `--skip-npm-ci`.
+
+The equivalent manual commands are:
 
 ```bash
 sudo dnf install rpm-build
+npm ci
 npm run desktop:package:rpm
 sudo dnf install ./out/huggingfacepull-0.1.0-1.*.x86_64.rpm
 ```

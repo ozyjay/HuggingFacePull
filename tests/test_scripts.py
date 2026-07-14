@@ -14,6 +14,7 @@ def test_workflow_scripts_exist():
     assert (ROOT / "desktop" / "package-rpm.cjs").is_file()
     assert (ROOT / "desktop" / "preload.cjs").is_file()
     assert (scripts / "install.sh").is_file()
+    assert (scripts / "package-install-fedora.sh").is_file()
     assert (scripts / "setup.ps1").is_file()
     assert (scripts / "test.ps1").is_file()
     assert (scripts / "run.ps1").is_file()
@@ -26,6 +27,7 @@ def test_workflow_scripts_cover_core_workflows():
     desktop_main = (ROOT / "desktop" / "main.cjs").read_text(encoding="utf-8")
     desktop_package = (ROOT / "desktop" / "package.cjs").read_text(encoding="utf-8")
     install = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    package_install_fedora = (ROOT / "scripts" / "package-install-fedora.sh").read_text(encoding="utf-8")
     setup = (ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
     test = (ROOT / "scripts" / "test.ps1").read_text(encoding="utf-8")
     run = (ROOT / "scripts" / "run.ps1").read_text(encoding="utf-8")
@@ -61,6 +63,9 @@ def test_workflow_scripts_cover_core_workflows():
     assert "macos" in install
     assert "python3-venv" in install
     assert 'pip install -e "$install_target"' in install
+    assert "npm run desktop:package:rpm" in package_install_fedora
+    assert "--install-build-deps" in package_install_fedora
+    assert 'run "${DNF[@]}" "${install_args[@]}"' in package_install_fedora
     assert 'Invoke-Checked "python3" "-m" "venv" ".venv"' in setup
     assert '".[dev]"' in setup
     assert "pytest" in test
