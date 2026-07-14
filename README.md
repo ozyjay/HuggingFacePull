@@ -128,6 +128,8 @@ hfpull gc --delete --include-partials --older-than-days 7
 
 By default, model payloads are stored in the standard Hugging Face cache:
 `~/.cache/huggingface/hub`.
+HuggingFacePull also honours `HF_HOME` and `HF_HUB_CACHE`, with
+`HF_HUB_CACHE` taking precedence when both are set.
 
 HuggingFacePull keeps small `.huggingfacepull.json` metadata markers under
 `~/.cache/huggingfacepull/library`. Set `HUGGINGFACE_PULL_LIBRARY=/path/to/library`
