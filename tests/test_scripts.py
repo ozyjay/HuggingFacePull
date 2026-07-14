@@ -34,6 +34,7 @@ def test_workflow_scripts_cover_core_workflows():
     cache_lister = (ROOT / "scripts" / "list_hf_caches.py").read_text(encoding="utf-8")
 
     assert package["main"] == "desktop/main.cjs"
+    assert package["productName"] == "HuggingFacePull"
     assert package["scripts"]["desktop:start"] == "electron ."
     assert package["scripts"]["desktop:package"] == "node desktop/package.cjs"
     assert package["scripts"]["desktop:package:rpm"] == "node desktop/package-rpm.cjs"
@@ -60,6 +61,9 @@ def test_workflow_scripts_cover_core_workflows():
     assert "portAcceptsConnections" in desktop_main
     assert "nodeIntegration: false" in desktop_main
     assert "contextIsolation: true" in desktop_main
+    assert 'app.setName("HuggingFacePull")' in desktop_main
+    assert 'app.setDesktopName("huggingfacepull.desktop")' in desktop_main
+    assert 'app.commandLine.appendSwitch("class", "huggingfacepull")' in desktop_main
     assert "Detected platform" in install
     assert "HF_HUB_DISABLE_XET=1" in install
     assert "fedora" in install
@@ -83,6 +87,15 @@ def test_workflow_scripts_cover_core_workflows():
     assert "HF_HUB_DISABLE_XET" in run
     assert "HF_HUB_CACHE" in cache_lister
     assert "--json" in cache_lister
+
+
+def test_desktop_launcher_matches_electron_identity():
+    launcher = (ROOT / "desktop" / "huggingfacepull.desktop").read_text(encoding="utf-8")
+
+    assert "Name=HuggingFacePull" in launcher
+    assert "Exec=huggingfacepull" in launcher
+    assert "Icon=huggingfacepull" in launcher
+    assert "StartupWMClass=huggingfacepull" in launcher
 
 
 def test_gitignore_blocks_project_local_model_artifacts():

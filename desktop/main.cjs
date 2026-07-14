@@ -11,6 +11,12 @@ const SERVER_READY_TIMEOUT_MS = 30000;
 const SERVER_POLL_INTERVAL_MS = 250;
 const PYTHON_WEB_LAUNCHER = "import sys; from huggingface_pull.cli import run_web; raise SystemExit(run_web(sys.argv[1:]))";
 
+app.setName("HuggingFacePull");
+if (process.platform === "linux") {
+  app.setDesktopName("huggingfacepull.desktop");
+  app.commandLine.appendSwitch("class", "huggingfacepull");
+}
+
 let backendProcess = null;
 let mainWindow = null;
 

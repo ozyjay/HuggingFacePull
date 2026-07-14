@@ -1,5 +1,6 @@
 {
   "name": "huggingfacepull-desktop",
+  "productName": "HuggingFacePull",
   "version": "0.1.0",
   "description": "Desktop wrapper for HuggingFacePull.",
   "private": true,
