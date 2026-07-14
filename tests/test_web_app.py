@@ -128,6 +128,20 @@ def test_search_install_state_matches_repo_revision_and_type():
             { repo_id: "google/diffusiongemma-26B-A4B-it", revision: "main", repo_type: "model", cache_status: "partial" },
           ]),
         );
+        assert.equal(
+          JSON.stringify(context.window.HuggingFacePull.installedSnapshotRows(
+            installed,
+            [
+              { repo_id: "Qwen/Qwen3", revision: "main", repo_type: "model", source: "huggingface_cache" },
+              { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model", source: "huggingface_cache" },
+            ],
+          )),
+          JSON.stringify([
+            { repo_id: "Qwen/Qwen3", revision: "main", repo_type: "model", display_source: "metadata" },
+            { repo_id: "Qwen/Qwen3", revision: "v2", repo_type: "dataset", display_source: "metadata" },
+            { repo_id: "Qwen/Qwen2.5-0.5B", revision: "main", repo_type: "model", source: "huggingface_cache", display_source: "huggingface_cache" },
+          ]),
+        );
         """
     )
 

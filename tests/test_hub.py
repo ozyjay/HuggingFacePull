@@ -144,6 +144,41 @@ def test_installed_models_reads_metadata_skips_malformed_and_sorts(tmp_path):
     ]
 
 
+def test_installed_models_resolves_metadata_after_hf_cache_moves(tmp_path, monkeypatch):
+    old_snapshot = tmp_path / "old-cache" / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+    cache = tmp_path / "new-cache"
+    new_snapshot = cache / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+    new_snapshot.mkdir(parents=True)
+    (new_snapshot / "weights.bin").write_bytes(b"weights")
+    marker = tmp_path / "library" / "Qwen--Qwen3" / "main" / ".huggingfacepull.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "repo_id": "Qwen/Qwen3",
+                "revision": "main",
+                "repo_type": "model",
+                "snapshot_path": str(old_snapshot),
+                "size": 7,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    assert hub.installed_models(tmp_path / "library") == [
+        {
+            "repo_id": "Qwen/Qwen3",
+            "revision": "main",
+            "repo_type": "model",
+            "snapshot_path": str(new_snapshot),
+            "size": 7,
+        }
+    ]
+    assert json.loads(marker.read_text(encoding="utf-8"))["snapshot_path"] == str(old_snapshot)
+
+
 def test_cached_hub_models_reads_huggingface_cache_repos(tmp_path, monkeypatch):
     cache = tmp_path / "hub"
     model = cache / "models--Qwen--Qwen2.5-0.5B"
