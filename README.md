@@ -34,6 +34,8 @@ This project expects `python3` from the active `pyenv` version.
 The web UI binds to `127.0.0.1:8019` by default and opens the local browser.
 Live Hub search results automatically group clearly related variants from the
 same model family while keeping every repository available to queue separately.
+If a stale cached Hub token is rejected, public search retries anonymously;
+private repositories and downloads still require a valid Hugging Face login.
 
 ## Run the Desktop App
 
