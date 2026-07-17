@@ -256,6 +256,33 @@ small {
   padding: 11px 0;
 }
 
+.variant-group {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.variant-group-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 3px;
+}
+
+.variant-group-heading strong {
+  overflow-wrap: anywhere;
+}
+
+.variant-group-heading span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.variant-group .result-row {
+  padding-left: 10px;
+}
+
 .result-row,
 .installed-row {
   grid-template-columns: minmax(0, 1fr) auto;

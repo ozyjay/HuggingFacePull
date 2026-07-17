@@ -2,6 +2,80 @@ import subprocess
 import textwrap
 
 
+def test_search_results_group_conservative_model_variants_without_mutation():
+    script = textwrap.dedent(
+        """
+        const assert = require("node:assert/strict");
+        const fs = require("node:fs");
+        const vm = require("node:vm");
+
+        const context = {
+          window: {},
+          document: {
+            addEventListener() {},
+            getElementById() { return null; },
+          },
+          setInterval() {},
+          fetch() {},
+        };
+        vm.createContext(context);
+        vm.runInContext(fs.readFileSync("src/huggingface_pull/web/app.js", "utf8"), context);
+
+        const results = [
+          { repo_id: "Qwen/Qwen3", downloads: 100 },
+          { repo_id: "Qwen/Qwen3-4B", downloads: 90 },
+          { repo_id: "Other/Qwen3-8B", downloads: 80 },
+          { repo_id: "Qwen/Qwen3-Coder-0.6B-Instruct", downloads: 70 },
+          { repo_id: "Qwen/Qwen3-Coder-4B-GGUF", downloads: 60 },
+          { repo_id: "Qwen/Qwen3-Embedding-0.6B", downloads: 50 },
+          { repo_id: "Qwen/Qwen3-Embedding-A3B-AWQ", downloads: 40 },
+          { repo_id: "Solo/Model-FP8", downloads: 30 },
+          { repo_id: "owner/7B-Instruct", downloads: 20 },
+          { repo_id: "missing-slash", downloads: 10 },
+          { name: "Qwen/Qwen3-8B-Chat", downloads: 5 },
+        ];
+        const original = JSON.stringify(results);
+        const grouped = context.window.HuggingFacePull.groupSearchResults(results);
+
+        assert.equal(
+          JSON.stringify(grouped),
+          JSON.stringify([
+            {
+              type: "group",
+              key: "qwen/qwen3",
+              label: "Qwen/Qwen3",
+              results: [results[0], results[1]],
+            },
+            { type: "result", result: results[2] },
+            {
+              type: "group",
+              key: "qwen/qwen3-coder",
+              label: "Qwen/Qwen3-Coder",
+              results: [results[3], results[4]],
+            },
+            {
+              type: "group",
+              key: "qwen/qwen3-embedding",
+              label: "Qwen/Qwen3-Embedding",
+              results: [results[5], results[6]],
+            },
+            { type: "result", result: results[7] },
+            { type: "result", result: results[8] },
+            { type: "result", result: results[9] },
+            { type: "result", result: results[10] },
+          ]),
+        );
+        assert.equal(JSON.stringify(results), original);
+        assert.equal(
+          JSON.stringify(context.window.HuggingFacePull.groupSearchResults(null)),
+          "[]",
+        );
+        """
+    )
+
+    subprocess.run(["node", "-e", script], check=True)
+
+
 def test_search_install_state_matches_repo_revision_and_type():
     script = textwrap.dedent(
         """
