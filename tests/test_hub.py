@@ -1128,6 +1128,93 @@ def test_remove_installed_model_traversal_revision_cannot_delete_outside_library
     assert not marker.parent.exists()
 
 
+def test_delete_installed_model_removes_snapshot_record_and_unshared_blobs(
+    tmp_path, monkeypatch
+):
+    cache = tmp_path / "hub"
+    repo = cache / "models--Qwen--Qwen3"
+    blobs = repo / "blobs"
+    main_snapshot = repo / "snapshots" / "abc123"
+    dev_snapshot = repo / "snapshots" / "def456"
+    refs = repo / "refs"
+    blobs.mkdir(parents=True)
+    main_snapshot.mkdir(parents=True)
+    dev_snapshot.mkdir(parents=True)
+    refs.mkdir(parents=True)
+
+    (blobs / "shared").write_bytes(b"shared")
+    (blobs / "main-only").write_bytes(b"main")
+    (blobs / "dev-only").write_bytes(b"dev")
+    (main_snapshot / "config.json").symlink_to("../../blobs/shared")
+    (main_snapshot / "model.safetensors").symlink_to("../../blobs/main-only")
+    (dev_snapshot / "config.json").symlink_to("../../blobs/shared")
+    (dev_snapshot / "model.safetensors").symlink_to("../../blobs/dev-only")
+    (refs / "main").write_text("abc123", encoding="utf-8")
+    (refs / "dev").write_text("def456", encoding="utf-8")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    library = tmp_path / "library"
+    ref = hub.HubRef(repo_id="Qwen/Qwen3", revision="main")
+    marker = hub.metadata_path(library, ref)
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps(
+            {
+                "repo_id": ref.repo_id,
+                "revision": ref.revision,
+                "repo_type": ref.repo_type,
+                "snapshot_path": str(main_snapshot),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    freed_size = hub.delete_installed_model(library, ref)
+
+    assert freed_size == 4
+    assert not main_snapshot.exists()
+    assert not (refs / "main").exists()
+    assert not (blobs / "main-only").exists()
+    assert not marker.parent.exists()
+    assert dev_snapshot.exists()
+    assert (refs / "dev").exists()
+    assert (blobs / "shared").exists()
+    assert (blobs / "dev-only").exists()
+
+
+def test_delete_installed_model_removes_cache_only_repo(tmp_path, monkeypatch):
+    cache = tmp_path / "hub"
+    repo = cache / "models--Qwen--Qwen3"
+    blob = repo / "blobs" / "weight"
+    snapshot = repo / "snapshots" / "abc123"
+    ref_path = repo / "refs" / "main"
+    blob.parent.mkdir(parents=True)
+    snapshot.mkdir(parents=True)
+    ref_path.parent.mkdir(parents=True)
+    blob.write_bytes(b"model")
+    (snapshot / "model.safetensors").symlink_to("../../blobs/weight")
+    ref_path.write_text("abc123", encoding="utf-8")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    freed_size = hub.delete_installed_model(
+        tmp_path / "library", hub.HubRef(repo_id="Qwen/Qwen3", revision="main")
+    )
+
+    assert freed_size == 5
+    assert not repo.exists()
+
+
+def test_delete_installed_model_requires_cached_revision(tmp_path, monkeypatch):
+    cache = tmp_path / "hub"
+    cache.mkdir()
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    with pytest.raises(KeyError):
+        hub.delete_installed_model(
+            tmp_path / "library", hub.HubRef(repo_id="Qwen/Qwen3", revision="main")
+        )
+
+
 def test_cleanup_library_reports_and_deletes_stale_partials_only_when_enabled(monkeypatch, tmp_path):
     old_partial = tmp_path / "Qwen--Qwen3" / "main" / "weights.bin.incomplete"
     recent_partial = tmp_path / "Qwen--Qwen3" / "main" / "tokenizer.tmp"
