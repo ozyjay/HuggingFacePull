@@ -56,7 +56,7 @@ class LocalASGITestClient:
         return httpx.Response(
             200,
             text=file_path.read_text(encoding="utf-8"),
-            headers={"content-type": content_type},
+            headers={"content-type": content_type, "cache-control": "no-store"},
         )
 
 

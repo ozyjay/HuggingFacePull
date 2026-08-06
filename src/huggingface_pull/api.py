@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from starlette.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from .config import DEFAULT_ENDPOINT, default_library_dir
@@ -25,6 +26,13 @@ from .queue import DownloadQueue
 
 
 WEB_DIR = Path(__file__).with_name("web")
+
+
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict[str, Any]) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 def create_app(
@@ -142,6 +150,6 @@ def create_app(
         return cleanup_library(queue.library_dir, delete=True, **payload.model_dump())
 
     if WEB_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+        app.mount("/", NoCacheStaticFiles(directory=WEB_DIR, html=True), name="web")
 
     return app

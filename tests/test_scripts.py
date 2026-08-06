@@ -57,6 +57,8 @@ def test_workflow_scripts_cover_core_workflows():
     assert "process.resourcesPath" in desktop_main
     assert "PYTHON_WEB_LAUNCHER" in desktop_main
     assert "probeExistingServer" in desktop_main
+    assert "!app.isPackaged || Boolean(process.env.HFPULL_DESKTOP_PORT)" in desktop_main
+    assert "mainWindow.webContents.session.clearCache()" in desktop_main
     assert "HFPULL_DESKTOP_PORT" in desktop_main
     assert "portAcceptsConnections" in desktop_main
     assert "nodeIntegration: false" in desktop_main

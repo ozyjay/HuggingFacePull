@@ -306,7 +306,7 @@ function isAllowedAppUrl(targetUrl, appUrl) {
   }
 }
 
-function createWindow(appUrl) {
+async function createWindow(appUrl) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -338,7 +338,11 @@ function createWindow(appUrl) {
     shell.openExternal(url);
   });
 
-  mainWindow.loadURL(appUrl);
+  // A reinstall can replace the local UI while Chromium retains the previous
+  // HTML and JavaScript. This app is entirely local, so a fresh cache is cheap
+  // and guarantees that the window matches its bundled backend.
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.loadURL(appUrl);
 }
 
 ipcMain.handle("select-hf-cache-directory", async () => {
@@ -367,9 +371,13 @@ async function main() {
   const root = projectRoot();
   let port = await backendPort();
   let ownsBackend = false;
+  const existingBackend = await probeExistingServer(port);
+  const reuseRequestedBackend = !app.isPackaged || Boolean(process.env.HFPULL_DESKTOP_PORT);
 
-  if (!(await probeExistingServer(port))) {
-    if (await portAcceptsConnections(port)) {
+  // Packaged releases must use their bundled backend. Reusing an older server
+  // on the default port can otherwise pair a new desktop shell with stale UI.
+  if (!existingBackend || !reuseRequestedBackend) {
+    if (existingBackend || await portAcceptsConnections(port)) {
       port = await findFreePort();
     }
     if (port !== DEFAULT_PORT) {
@@ -388,7 +396,7 @@ async function main() {
 
   const appUrl = `http://${HOST}:${port}/`;
 
-  createWindow(appUrl);
+  await createWindow(appUrl);
   mainWindow.on("closed", () => {
     mainWindow = null;
     if (ownsBackend) {

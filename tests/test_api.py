@@ -5,6 +5,7 @@ import threading
 import time
 from pathlib import Path
 
+from starlette.responses import Response
 from starlette.testclient import TestClient
 
 import huggingface_pull.cli as cli_module
@@ -50,6 +51,30 @@ def test_static_index_served(tmp_path):
 
     assert response.status_code == 200
     assert "HuggingFacePull" in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_static_javascript_is_not_cached(tmp_path):
+    client = TestClient(create_app(library_dir=tmp_path))
+
+    response = client.get("/app.js")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_static_file_handler_sets_no_store_header(monkeypatch, tmp_path):
+    import huggingface_pull.api as api_module
+
+    async def static_response(_self, _path, _scope):
+        return Response("asset")
+
+    monkeypatch.setattr(api_module.StaticFiles, "get_response", static_response)
+    static_files = api_module.NoCacheStaticFiles(directory=tmp_path)
+
+    response = asyncio.run(static_files.get_response("app.js", {"type": "http"}))
+
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_queue_endpoint_queues_repo(tmp_path):
