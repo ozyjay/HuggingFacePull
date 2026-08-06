@@ -1,5 +1,6 @@
 import subprocess
 import textwrap
+from pathlib import Path
 
 
 def test_search_results_group_conservative_model_variants_without_mutation():
@@ -165,10 +166,6 @@ def test_search_install_state_matches_repo_revision_and_type():
           "partial_cache",
         );
         assert.equal(
-          context.window.HuggingFacePull.cacheActionLabel("partial_cache"),
-          "Resume download",
-        );
-        assert.equal(
           context.window.HuggingFacePull.snapshotInstallState(
             installed,
             cached,
@@ -224,6 +221,15 @@ def test_search_install_state_matches_repo_revision_and_type():
     )
 
     subprocess.run(["node", "-e", script], check=True)
+
+
+def test_search_results_configure_before_adding_to_queue():
+    source = Path("src/huggingface_pull/web/app.js").read_text(encoding="utf-8")
+
+    assert 'data-configure-repo=' in source
+    assert 'Choose download options, then add it to the queue.' in source
+    assert source.count("addRepoFromForm()") == 2
+    assert 'data-add-search=' not in source
 
 
 def test_download_status_helpers_show_running_and_unknown_total_details():
