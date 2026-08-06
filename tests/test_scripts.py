@@ -74,6 +74,7 @@ def test_workflow_scripts_cover_core_workflows():
     assert 'pip install -e "$install_target"' in install
     assert "npm run desktop:package:rpm" in package_install_fedora
     assert "--install-build-deps" in package_install_fedora
+    assert '--setopt=localpkg_gpgcheck=0 "$action" "$rpm_path"' in package_install_fedora
     assert 'run "${DNF[@]}" "${install_args[@]}"' in package_install_fedora
     assert 'Invoke-Checked "python3" "-m" "venv" ".venv"' in setup
     assert 'Invoke-Checked $python "-m" "pip" "install" "--upgrade" "pip"' in setup

@@ -74,7 +74,9 @@ On a new Fedora development machine, the script can install its build tools too:
 
 Pass `--yes` to make the `dnf` operations non-interactive. The script runs
 `npm ci`, builds the bundled desktop app and backend, creates the RPM, and then
-installs (or reinstalls) that exact artifact. To reuse an existing
+installs (or reinstalls) that exact artifact. Because local development RPMs are
+unsigned, the script disables signature checking for that command-line RPM only;
+packages from configured repositories are still checked. To reuse an existing
 `node_modules` directory, pass `--skip-npm-ci`.
 
 The equivalent manual commands are:
@@ -83,7 +85,7 @@ The equivalent manual commands are:
 sudo dnf install rpm-build
 npm ci
 npm run desktop:package:rpm
-sudo dnf install ./out/huggingfacepull-0.1.0-1.*.x86_64.rpm
+sudo dnf --setopt=localpkg_gpgcheck=0 install ./out/huggingfacepull-0.1.0-1.*.x86_64.rpm
 ```
 
 The RPM installs the bundled app under `/opt/huggingfacepull`, adds a command at

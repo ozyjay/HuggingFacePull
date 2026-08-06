@@ -5,7 +5,9 @@ usage() {
     cat <<'EOF'
 Usage: ./scripts/package-install-fedora.sh [options]
 
-Build the HuggingFacePull desktop RPM and install it with dnf.
+Build the HuggingFacePull desktop RPM and install it with dnf. The locally
+built RPM is unsigned, so its signature check is disabled for this transaction;
+repository package signature checks remain enabled.
 
 Options:
   --install-build-deps  Install missing Fedora build tools with dnf.
@@ -122,7 +124,9 @@ main() {
         action=reinstall
     fi
 
-    local -a install_args=("$action" "$rpm_path")
+    # rpmbuild does not sign local development artifacts. Limit the exception to
+    # command-line RPMs so dependencies from configured repositories are still checked.
+    local -a install_args=(--setopt=localpkg_gpgcheck=0 "$action" "$rpm_path")
     [[ "$assume_yes" == 1 ]] && install_args+=(--assumeyes)
     run "${DNF[@]}" "${install_args[@]}"
 
