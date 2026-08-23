@@ -223,9 +223,9 @@
     }
   }
 
-  async function addRepoFromForm(repoIdOverride) {
+  async function addRepoFromForm() {
     const payload = {
-      repo_id: repoIdOverride || els.repoIdInput.value.trim(),
+      repo_id: els.repoIdInput.value.trim(),
       revision: els.revisionInput.value.trim() || "main",
       repo_type: els.repoTypeInput.value,
       allow_patterns: splitPatterns(els.allowPatternsInput.value),
@@ -251,18 +251,20 @@
         return;
       }
       els.searchResults.innerHTML = `
-        <div class="file-summary">${cachedSuggestions.length} cached snapshot${cachedSuggestions.length === 1 ? "" : "s"} ready to add</div>
+        <div class="file-summary">${cachedSuggestions.length} cached snapshot${cachedSuggestions.length === 1 ? "" : "s"} available</div>
         ${cachedSuggestions.slice(0, 20).map((item) => `
           <article class="result-row">
             <div>
               <strong>${escapeHtml(item.repo_id)}</strong>
               <small>${escapeHtml(item.revision || "main")} | ${escapeHtml(cacheSourceLabel(item))}</small>
             </div>
-            <button type="button" data-add-search="${escapeAttr(item.repo_id)}" data-add-revision="${escapeAttr(item.revision || "main")}" data-add-repo-type="${escapeAttr(item.repo_type || "model")}">${cacheActionLabel(item.cache_status === "partial" ? "partial_cache" : "cached")}</button>
+            ${configuredRepoMatches(item.repo_id, item.revision, item.repo_type)
+              ? `<button type="button" class="secondary" disabled>Selected</button>`
+              : `<button type="button" data-configure-repo="${escapeAttr(item.repo_id)}" data-configure-revision="${escapeAttr(item.revision || "main")}" data-configure-repo-type="${escapeAttr(item.repo_type || "model")}">Configure</button>`}
           </article>
         `).join("")}
       `;
-      bindSearchAddButtons();
+      bindSearchConfigureButtons();
       return;
     }
     if (state.searchError) {
@@ -287,7 +289,7 @@
       `;
     }).join("");
 
-    bindSearchAddButtons();
+    bindSearchConfigureButtons();
   }
 
   function renderSearchResultRow(result) {
@@ -313,7 +315,9 @@
         </div>
         ${installState === "installed"
           ? `<button type="button" class="secondary" disabled>Installed</button>`
-          : `<button type="button" data-add-search="${escapeAttr(repoId)}" data-add-revision="${escapeAttr(els.revisionInput.value.trim() || "main")}" data-add-repo-type="${escapeAttr(els.repoTypeInput.value || "model")}">${cacheActionLabel(installState)}</button>`}
+          : configuredRepoMatches(repoId, els.revisionInput.value, els.repoTypeInput.value)
+            ? `<button type="button" class="secondary" disabled>Selected</button>`
+            : `<button type="button" data-configure-repo="${escapeAttr(repoId)}" data-configure-revision="${escapeAttr(els.revisionInput.value.trim() || "main")}" data-configure-repo-type="${escapeAttr(els.repoTypeInput.value || "model")}">Configure</button>`}
       </article>
     `;
   }
@@ -394,22 +398,26 @@
       || /^a\d+(?:\.\d+)?[bmkt]$/.test(value);
   }
 
-  function bindSearchAddButtons() {
-    els.searchResults.querySelectorAll("[data-add-search]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        els.repoIdInput.value = button.getAttribute("data-add-search") || "";
-        els.revisionInput.value = button.getAttribute("data-add-revision") || "main";
-        els.repoTypeInput.value = button.getAttribute("data-add-repo-type") || "model";
-        try {
-          const item = await addRepoFromForm(els.repoIdInput.value);
-          state.selectedItemId = item.id;
-          showNotice(`Queued ${item.repo_id}`);
-          await refresh();
-        } catch (error) {
-          showNotice(error.message, true);
-        }
+  function bindSearchConfigureButtons() {
+    els.searchResults.querySelectorAll("[data-configure-repo]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const repoId = button.getAttribute("data-configure-repo") || "";
+        els.repoIdInput.value = repoId;
+        els.revisionInput.value = button.getAttribute("data-configure-revision") || "main";
+        els.repoTypeInput.value = button.getAttribute("data-configure-repo-type") || "model";
+        state.fileResults = null;
+        showNotice(`Selected ${repoId}. Choose download options, then add it to the queue.`);
+        render();
+        els.xetEnabledInput.focus();
       });
     });
+  }
+
+  function configuredRepoMatches(repoId, revision, repoType) {
+    return Boolean(repoId)
+      && els.repoIdInput.value.trim() === repoId
+      && (els.revisionInput.value.trim() || "main") === (revision || "main")
+      && (els.repoTypeInput.value || "model") === (repoType || "model");
   }
 
   function renderFileResults() {
@@ -864,16 +872,6 @@
     return rows;
   }
 
-  function cacheActionLabel(installState) {
-    if (installState === "cached") {
-      return "Add from cache";
-    }
-    if (installState === "partial_cache") {
-      return "Resume download";
-    }
-    return "Add";
-  }
-
   function cacheSourceLabel(item) {
     if (item && item.cache_status === "partial") {
       return "partial HF cache";
@@ -1028,7 +1026,6 @@
     snapshotInstallState,
     availableCachedSnapshots,
     installedSnapshotRows,
-    cacheActionLabel,
     groupSearchResults,
     downloadStatusLine,
     progressBreakdown,
