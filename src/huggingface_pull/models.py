@@ -16,6 +16,7 @@ class QueueRequest(BaseModel):
     allow_patterns: list[str] = Field(default_factory=list)
     ignore_patterns: list[str] = Field(default_factory=list)
     local_dir: str | None = None
+    xet_enabled: bool = False
 
 
 class InstalledRemoveRequest(BaseModel):

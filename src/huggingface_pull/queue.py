@@ -89,6 +89,7 @@ class DownloadQueue:
                 "repo_type": ref.repo_type,
                 "allow_patterns": list(ref.allow_patterns),
                 "ignore_patterns": list(ref.ignore_patterns),
+                "xet_enabled": ref.xet_enabled,
                 "canonical_ref": canonical,
                 "deduplicated": False,
                 "status": "waiting",
@@ -111,6 +112,7 @@ class DownloadQueue:
                 repo_type=item["repo_type"],
                 allow_patterns=list(item["allow_patterns"]),
                 ignore_patterns=list(item["ignore_patterns"]),
+                xet_enabled=item["xet_enabled"],
             )
             self._condition.notify_all()
             return self._copy_item(item)
@@ -396,6 +398,7 @@ class DownloadQueue:
             repo_type=repo_type,
             allow_patterns=list(payload.get("allow_patterns") or []),
             ignore_patterns=list(payload.get("ignore_patterns") or []),
+            xet_enabled=bool(payload.get("xet_enabled", False)),
         )
 
     def _planned_files_from_event(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -569,6 +572,7 @@ class DownloadQueue:
         copied = {key: value for key, value in item.items() if not key.startswith("_")}
         copied["allow_patterns"] = list(item["allow_patterns"])
         copied["ignore_patterns"] = list(item["ignore_patterns"])
+        copied["xet_enabled"] = bool(item.get("xet_enabled", False))
         copied["messages"] = [dict(message) for message in item["messages"]]
         copied["progress"] = {
             "phase": item["progress"]["phase"],

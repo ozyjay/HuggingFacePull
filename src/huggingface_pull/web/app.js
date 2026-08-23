@@ -36,6 +36,7 @@
       "repoTypeInput",
       "allowPatternsInput",
       "ignorePatternsInput",
+      "xetEnabledInput",
       "inspectFiles",
       "fileResults",
       "queueSummary",
@@ -227,6 +228,7 @@
       repo_type: els.repoTypeInput.value,
       allow_patterns: splitPatterns(els.allowPatternsInput.value),
       ignore_patterns: splitPatterns(els.ignorePatternsInput.value),
+      xet_enabled: Boolean(els.xetEnabledInput.checked),
       local_dir: null,
     };
     if (!payload.repo_id) {
@@ -367,6 +369,7 @@
             <p class="download-status">${escapeHtml(statusLine)}</p>
             <div class="row-meta">
               <span>${escapeHtml(item.revision || "main")}</span>
+              <span>${transferModeLabel(item)}</span>
               <span>${formatProgressAmount(overall)}</span>
               ${progressBreakdown(overall) ? `<span>${escapeHtml(progressBreakdown(overall))}</span>` : ""}
               <span>${formatPercent(overall.percent)}</span>
@@ -452,7 +455,7 @@
       <div class="detail-stack">
         <div>
           <h3>${escapeHtml(item.repo_id)}</h3>
-          <p>${escapeHtml(item.revision || "main")} | ${escapeHtml(item.repo_type || "model")}</p>
+          <p>${escapeHtml(item.revision || "main")} | ${escapeHtml(item.repo_type || "model")} | ${transferModeLabel(item)}</p>
         </div>
         <p class="download-status detail-status-line">${escapeHtml(downloadStatusLine(item))}</p>
         <div class="progress detail-progress" aria-label="Overall progress">
@@ -460,6 +463,7 @@
         </div>
         <dl>
           <div><dt>Phase</dt><dd>${escapeHtml(progress.phase || item.status)}</dd></div>
+          <div><dt>Transfer</dt><dd>${transferModeLabel(item)}</dd></div>
           <div><dt>Overall</dt><dd>${formatProgressAmount(overall)}</dd></div>
           ${progressBreakdown(overall) ? `<div><dt>Cache</dt><dd>${escapeHtml(progressBreakdown(overall))}</dd></div>` : ""}
           <div><dt>Percent</dt><dd>${formatPercent(overall.percent)}</dd></div>
@@ -591,6 +595,10 @@
       parts.push(`ETA ${eta}`);
     }
     return parts.join(" | ");
+  }
+
+  function transferModeLabel(item) {
+    return item && item.xet_enabled ? "Xet" : "Plain HTTP";
   }
 
   function currentFileLabel(current) {
@@ -851,6 +859,7 @@
     cacheActionLabel,
     downloadStatusLine,
     progressBreakdown,
+    transferModeLabel,
     cleanupSummaryLine,
     queueControlState,
     queueRunState,

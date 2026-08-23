@@ -69,9 +69,10 @@ def test_add_creates_waiting_item(tmp_path):
     assert item["repo_type"] == "model"
     assert item["allow_patterns"] == ["*.safetensors", "*.json"]
     assert item["ignore_patterns"] == ["*.bin"]
+    assert item["xet_enabled"] is False
     assert (
         item["canonical_ref"]
-        == "model:Qwen/Qwen3-Embedding-0.6B@main?allow=*.json,*.safetensors&ignore=*.bin"
+        == "model:Qwen/Qwen3-Embedding-0.6B@main?allow=*.json,*.safetensors&ignore=*.bin&xet=0"
     )
     assert item["deduplicated"] is False
     assert item["status"] == "waiting"
@@ -85,6 +86,15 @@ def test_add_creates_waiting_item(tmp_path):
     assert isinstance(item["id"], str)
     assert isinstance(item["created_at"], float)
     assert isinstance(item["updated_at"], float)
+
+
+def test_add_records_xet_enabled(tmp_path):
+    queue = DownloadQueue(library_dir=tmp_path, pull_func=lambda *args, **kwargs: None)
+
+    item = queue.add({"repo_id": "Qwen/Qwen3", "xet_enabled": True})
+
+    assert item["xet_enabled"] is True
+    assert item["canonical_ref"].endswith("&xet=1")
 
 
 def test_cache_partial_progress_event_reports_growing_incomplete_blob(monkeypatch, tmp_path):
@@ -299,6 +309,7 @@ def test_queue_logs_download_lifecycle(monkeypatch, tmp_path):
                 "repo_type": "model",
                 "allow_patterns": [],
                 "ignore_patterns": [],
+                "xet_enabled": False,
             },
         ),
         ("worker started", {"library_dir": tmp_path, "endpoint": "https://huggingface.co"}),

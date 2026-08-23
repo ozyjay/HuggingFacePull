@@ -16,6 +16,7 @@ def test_parser_accepts_repo_revision_and_filters():
             "model",
             "--max-workers",
             "2",
+            "--xet",
         ]
     )
 
@@ -25,6 +26,7 @@ def test_parser_accepts_repo_revision_and_filters():
     assert args.ignore == ["*.bin"]
     assert args.repo_type == "model"
     assert args.max_workers == 2
+    assert args.xet is True
 
 
 def test_run_web_without_args_starts_server(monkeypatch):
@@ -100,13 +102,26 @@ def test_main_calls_pull_snapshot(monkeypatch, tmp_path):
     calls = []
 
     def fake_pull_snapshot(ref, library_dir, **kwargs):
-        calls.append((ref.repo_id, library_dir, kwargs["max_workers"]))
+        calls.append((ref.repo_id, library_dir, kwargs["max_workers"], ref.xet_enabled))
         return tmp_path / "Qwen--Qwen3" / "main"
 
     monkeypatch.setattr(cli, "pull_snapshot", fake_pull_snapshot)
 
     assert cli.main(["Qwen/Qwen3", "--library-dir", str(tmp_path), "--max-workers", "4"]) == 0
-    assert calls == [("Qwen/Qwen3", tmp_path, 4)]
+    assert calls == [("Qwen/Qwen3", tmp_path, 4, False)]
+
+
+def test_main_passes_xet_flag(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_pull_snapshot(ref, library_dir, **kwargs):
+        calls.append(ref.xet_enabled)
+        return tmp_path / "Qwen--Qwen3" / "main"
+
+    monkeypatch.setattr(cli, "pull_snapshot", fake_pull_snapshot)
+
+    assert cli.main(["Qwen/Qwen3", "--library-dir", str(tmp_path), "--xet"]) == 0
+    assert calls == [True]
 
 
 def test_gc_calls_cleanup(monkeypatch, tmp_path):
