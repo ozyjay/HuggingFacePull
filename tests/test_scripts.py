@@ -17,6 +17,8 @@ def test_workflow_scripts_exist():
     assert (scripts / "run.ps1").is_file()
     assert (scripts / "common.ps1").is_file()
     assert (scripts / "list_hf_caches.py").is_file()
+    assert (ROOT / "mac" / "HuggingFacePullMac" / "Info.plist").is_file()
+    assert (ROOT / "mac" / "HuggingFacePullMac" / "HuggingFacePullMac-launcher.sh").is_file()
 
 
 def test_workflow_scripts_cover_core_workflows():
@@ -51,6 +53,11 @@ def test_workflow_scripts_cover_core_workflows():
     assert "macos" in install
     assert "python3-venv" in install
     assert 'pip install -e "$install_target"' in install
+    assert "--install-mac-app" in install
+    assert "install_macos_app" in install
+    assert "HuggingFacePullMac.app" in install
+    assert "--copies" in install
+    assert "lsregister -f" in install
     assert 'Invoke-Checked "python3" "-m" "venv" ".venv"' in setup
     assert '".[dev]"' in setup
     assert "pytest" in test

@@ -48,6 +48,15 @@ The native Mac app starts the local FastAPI backend without opening a browser,
 then connects to `http://127.0.0.1:8019`. It supports the shared search, queue,
 Xet transfer, installed snapshot deletion, and cleanup APIs.
 
+Install a self-contained local app bundle in `~/Applications` with:
+
+```bash
+./scripts/install.sh --runtime --install-mac-app
+```
+
+The installer builds the release Swift app, bundles the Python backend, and
+backs up any existing `HuggingFacePullMac.app` before replacing it.
+
 ## Run the Desktop App
 
 The desktop app is an Electron wrapper around the same local FastAPI server and

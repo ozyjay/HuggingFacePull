@@ -18,6 +18,8 @@ Options:
   --recreate              Remove and recreate .venv.
   --install-system-deps   Install missing platform packages when a supported
                           package manager is available.
+  --install-mac-app       Build and install HuggingFacePullMac.app in
+                          ~/Applications (macOS only).
   -y, --yes               Do not prompt when installing system packages.
   -h, --help              Show this help.
 EOF
@@ -197,10 +199,61 @@ ensure_venv_support() {
     die "Python venv support is unavailable. Suggested action: $(package_install_command)"
 }
 
+install_macos_app() {
+    local root="$1"
+    local python="$2"
+    local mac_root="$root/mac/HuggingFacePullMac"
+    local staging_app="$root/build/HuggingFacePullMac.app"
+    local backend_dir="$staging_app/Contents/Resources/backend"
+    local backend_venv="$backend_dir/.venv"
+    local applications_dir="$HOME/Applications"
+    local installed_app="$applications_dir/HuggingFacePullMac.app"
+    local bin_path
+
+    [[ "$PLATFORM_ID" == "macos" ]] || die "--install-mac-app is supported on macOS only"
+    have swift || die "Swift is required for --install-mac-app. Install Xcode or the Xcode Command Line Tools."
+    [[ -f "$mac_root/Package.swift" ]] || die "Mac app package not found: $mac_root"
+    [[ -f "$mac_root/Info.plist" ]] || die "Mac app Info.plist template not found"
+    [[ -f "$mac_root/HuggingFacePullMac-launcher.sh" ]] || die "Mac app launcher template not found"
+
+    run swift build --configuration release --package-path "$mac_root" --product HuggingFacePullMac
+    bin_path="$(swift build --configuration release --package-path "$mac_root" --show-bin-path)"
+    [[ -x "$bin_path/HuggingFacePullMac" ]] || die "Mac app executable was not produced"
+
+    run rm -rf "$staging_app"
+    run mkdir -p "$staging_app/Contents/MacOS" "$backend_dir"
+    run install -m 755 "$bin_path/HuggingFacePullMac" "$staging_app/Contents/MacOS/HuggingFacePullMac.bin"
+    run install -m 755 "$mac_root/HuggingFacePullMac-launcher.sh" "$staging_app/Contents/MacOS/HuggingFacePullMac"
+    run install -m 644 "$mac_root/Info.plist" "$staging_app/Contents/Info.plist"
+    run cp -R "$root/src" "$backend_dir/src"
+
+    run "$python" -m venv --copies "$backend_venv"
+    run "$backend_venv/bin/python" -m pip install --upgrade pip
+    run "$backend_venv/bin/python" -m pip install "$root"
+
+    run mkdir -p "$applications_dir"
+    if [[ -e "$installed_app" ]]; then
+        local backup_app="$applications_dir/HuggingFacePullMac.app.backup-$(date +%Y%m%d-%H%M%S)"
+        run mv "$installed_app" "$backup_app"
+        log "Previous app moved to: $backup_app"
+    fi
+    run mv "$staging_app" "$installed_app"
+
+    if have codesign; then
+        run codesign --force --sign - "$installed_app/Contents/MacOS/HuggingFacePullMac.bin"
+    fi
+    if [[ -x /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister ]]; then
+        run /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$installed_app"
+    fi
+
+    log "Mac app installed: $installed_app"
+}
+
 main() {
     local install_target=".[dev]"
     local recreate=0
     local install_deps=0
+    local install_mac_app=0
     local assume_yes=0
 
     while (($#)); do
@@ -216,6 +269,9 @@ main() {
                 ;;
             --install-system-deps)
                 install_deps=1
+                ;;
+            --install-mac-app)
+                install_mac_app=1
                 ;;
             -y|--yes)
                 assume_yes=1
@@ -267,11 +323,18 @@ main() {
     run "$venv_python" -m pip install --upgrade pip
     run "$venv_python" -m pip install -e "$install_target"
 
+    if [[ "$install_mac_app" == 1 ]]; then
+        install_macos_app "$root" "$python"
+    fi
+
     log ""
     log "Install complete."
     log "Python: $("$venv_python" -c 'import sys; print(sys.executable)')"
     log "Run the web UI with: ./scripts/run.ps1"
     log "Or run directly with: .venv/bin/hfpull-web --host 127.0.0.1 --port 8019"
+    if [[ "$install_mac_app" == 1 ]]; then
+        log "Open the Mac app from ~/Applications/HuggingFacePullMac.app"
+    fi
 }
 
 main "$@"
