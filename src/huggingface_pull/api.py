@@ -6,7 +6,9 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
+from . import hub as hub_module
 from .config import DEFAULT_ENDPOINT, default_library_dir
 from .hub import (
     HubRef,
@@ -24,6 +26,13 @@ from .queue import DownloadQueue
 
 
 WEB_DIR = Path(__file__).with_name("web")
+
+
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict[str, Any]) -> Response:
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 def create_app(
@@ -45,6 +54,7 @@ def create_app(
         snapshot["cached_models"] = cached_hub_models()
         snapshot["partial_cached_models"] = partial_cached_hub_models()
         snapshot["server_pid"] = os.getpid()
+        snapshot["hf_hub_cache"] = str(Path(hub_module.HF_HUB_CACHE).expanduser())
         return snapshot
 
     @app.get("/api/search")
@@ -122,7 +132,7 @@ def create_app(
         return {"ok": True}
 
     @app.post("/api/installed/delete")
-    async def delete_installed(payload: InstalledRemoveRequest) -> dict[str, Any]:
+    def delete_installed(payload: InstalledRemoveRequest) -> dict[str, Any]:
         try:
             freed_size = delete_installed_model(
                 queue.library_dir, HubRef(**payload.model_dump())
@@ -140,6 +150,6 @@ def create_app(
         return cleanup_library(queue.library_dir, delete=True, **payload.model_dump())
 
     if WEB_DIR.is_dir():
-        app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+        app.mount("/", NoCacheStaticFiles(directory=WEB_DIR, html=True), name="web")
 
     return app

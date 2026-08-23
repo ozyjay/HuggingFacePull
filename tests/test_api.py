@@ -40,6 +40,7 @@ def test_state_endpoint_returns_snapshot(tmp_path):
     assert data["items"] == []
     assert data["library_dir"] == str(tmp_path)
     assert isinstance(data["server_pid"], int)
+    assert data["hf_hub_cache"] == str(tmp_path / "huggingface-hub")
 
 
 def test_static_index_served(tmp_path):
@@ -49,6 +50,16 @@ def test_static_index_served(tmp_path):
 
     assert response.status_code == 200
     assert "HuggingFacePull" in response.text
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_static_javascript_is_not_cached(tmp_path):
+    client = TestClient(create_app(library_dir=tmp_path))
+
+    response = client.get("/app.js")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_queue_endpoint_queues_repo(tmp_path):
