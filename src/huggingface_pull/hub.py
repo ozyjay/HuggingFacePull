@@ -115,12 +115,16 @@ def search_models(
 
     try:
         api = _hf_api_class()(endpoint=endpoint)
-        models = api.list_models(
-            search=query,
-            limit=20,
-            sort="downloads",
-            token=token,
-        )
+        try:
+            models = _search_model_list(api, query, token)
+        except Exception as error:
+            if token is not None or not _is_unauthorised_hub_error(error):
+                raise
+            write_log(
+                "hub search retrying anonymously",
+                reason="cached_token_unauthorised",
+            )
+            models = _search_model_list(api, query, False)
         results = [
             {
                 "repo_id": model.modelId,
@@ -135,6 +139,22 @@ def search_models(
         return {"available": True, "results": results, "error": None}
     except Exception as error:
         return {"available": False, "results": [], "error": str(error)}
+
+
+def _search_model_list(api: Any, query: str, token: str | bool | None) -> list[Any]:
+    return list(
+        api.list_models(
+            search=query,
+            limit=20,
+            sort="downloads",
+            token=token,
+        )
+    )
+
+
+def _is_unauthorised_hub_error(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) == 401
 
 
 def repo_files(

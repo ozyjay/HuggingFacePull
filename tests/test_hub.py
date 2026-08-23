@@ -477,6 +477,57 @@ def test_search_models_returns_unavailable_on_api_error(monkeypatch):
     assert "hub unavailable" in result["error"]
 
 
+def test_search_models_retries_anonymously_after_cached_token_401(monkeypatch):
+    calls = []
+
+    class CachedTokenRejected(Exception):
+        response = SimpleNamespace(status_code=401)
+
+    class FakeApi:
+        def __init__(self, endpoint):
+            assert endpoint == "https://hf.example"
+
+        def list_models(self, *, search, limit, sort, token):
+            calls.append(token)
+            if token is None:
+                raise CachedTokenRejected("cached token rejected")
+            assert token is False
+            return [SimpleNamespace(modelId="google/gemma-3-4b-it")]
+
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+
+    result = hub.search_models("gemma", endpoint="https://hf.example")
+
+    assert result["available"] is True
+    assert result["results"][0]["repo_id"] == "google/gemma-3-4b-it"
+    assert result["error"] is None
+    assert calls == [None, False]
+
+
+def test_search_models_does_not_bypass_explicit_token_401(monkeypatch):
+    calls = []
+
+    class ExplicitTokenRejected(Exception):
+        response = SimpleNamespace(status_code=401)
+
+    class FakeApi:
+        def __init__(self, endpoint):
+            pass
+
+        def list_models(self, **kwargs):
+            calls.append(kwargs["token"])
+            raise ExplicitTokenRejected("explicit token rejected")
+
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+
+    result = hub.search_models("gemma", token="invalid-explicit-token")
+
+    assert result["available"] is False
+    assert result["results"] == []
+    assert "explicit token rejected" in result["error"]
+    assert calls == ["invalid-explicit-token"]
+
+
 def test_repo_files_maps_model_siblings(monkeypatch):
     class FakeApi:
         def __init__(self, endpoint):
