@@ -10,6 +10,24 @@ DEFAULT_MAX_WORKERS = 1
 DEFAULT_STALL_TIMEOUT_SECONDS = 180.0
 
 
+def default_hf_hub_cache() -> Path:
+    configured = os.environ.get("HF_HUB_CACHE")
+    if configured:
+        return Path(configured).expanduser()
+
+    configured_home = os.environ.get("HF_HOME")
+    if configured_home:
+        return Path(configured_home).expanduser() / "hub"
+
+    configured_xdg_cache = os.environ.get("XDG_CACHE_HOME")
+    cache_home = (
+        Path(configured_xdg_cache).expanduser()
+        if configured_xdg_cache
+        else Path.home() / ".cache"
+    )
+    return cache_home / "huggingface" / "hub"
+
+
 def default_library_dir() -> Path:
     configured = os.environ.get("HUGGINGFACE_PULL_LIBRARY")
     if configured:

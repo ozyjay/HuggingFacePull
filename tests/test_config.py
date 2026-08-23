@@ -6,9 +6,36 @@ import pytest
 from pydantic import ValidationError
 
 from huggingface_pull.app_logging import write_log
-from huggingface_pull.config import default_library_dir, default_log_file, safe_repo_dir_name
+from huggingface_pull.config import (
+    default_hf_hub_cache,
+    default_library_dir,
+    default_log_file,
+    safe_repo_dir_name,
+)
 from huggingface_pull.models import CleanupRequest, QueueRequest
 from huggingface_pull.models import InstalledRemoveRequest
+
+
+def test_default_hf_hub_cache_uses_explicit_cache_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "explicit-cache"))
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+
+    assert default_hf_hub_cache() == tmp_path / "explicit-cache"
+
+
+def test_default_hf_hub_cache_uses_hf_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf-home"))
+
+    assert default_hf_hub_cache() == tmp_path / "hf-home" / "hub"
+
+
+def test_default_hf_hub_cache_uses_xdg_cache_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    assert default_hf_hub_cache() == tmp_path / "cache" / "huggingface" / "hub"
 
 
 def test_default_library_dir_uses_environment(monkeypatch, tmp_path):

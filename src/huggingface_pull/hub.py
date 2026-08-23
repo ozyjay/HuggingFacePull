@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .app_logging import write_log
-from .config import DEFAULT_ENDPOINT, default_max_workers, safe_repo_dir_name
+from .config import (
+    DEFAULT_ENDPOINT,
+    default_hf_hub_cache,
+    default_max_workers,
+    safe_repo_dir_name,
+)
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -32,10 +37,7 @@ SHARDED_PAYLOAD_RE = re.compile(
     r"^(?P<prefix>.+)-(?P<index>\d{5})-of-(?P<total>\d{5})(?P<suffix>\.[^.]+)$"
 )
 _LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
-HF_HUB_CACHE = os.environ.get(
-    "HF_HUB_CACHE",
-    str(Path.home() / ".cache" / "huggingface" / "hub"),
-)
+HF_HUB_CACHE = str(default_hf_hub_cache())
 HfApi: Any | None = None
 snapshot_download: Any | None = None
 hf_tqdm: Any | None = None

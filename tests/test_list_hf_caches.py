@@ -48,12 +48,13 @@ def test_discovers_env_defaults_and_project_local_caches(tmp_path, monkeypatch):
     assert by_label["HF_HUB_CACHE"]["size_bytes"] == 5
 
 
-def test_json_output_is_parseable(tmp_path, capsys):
+def test_json_output_is_parseable(tmp_path, capsys, monkeypatch):
     module = load_script_module()
     home = tmp_path / "home"
     cache = home / ".cache" / "huggingface" / "hub"
     cache.mkdir(parents=True)
     (cache / "model.bin").write_bytes(b"abcd")
+    monkeypatch.delenv("HF_HOME", raising=False)
 
     exit_code = module.main(["--json", "--home", str(home), "--project-root", str(tmp_path)])
 
