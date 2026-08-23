@@ -20,6 +20,7 @@ PROGRESS_LOG_PERCENT_STEP = 5.0
 PROCESS_EVENT_POLL_SECONDS = 0.1
 STALLED_PROGRESS_SECONDS = 60.0
 PARTIAL_PROGRESS_POLL_SECONDS = 1.0
+FINALISING_STALL_TIMEOUT_SECONDS = 30 * 60.0
 
 
 class DownloadForceStopped(Exception):
@@ -381,6 +382,24 @@ class DownloadQueue:
                 "updated_at": updated_at,
             }
             return
+        if event_type == "fetch-progress":
+            progress["phase"] = "fetching"
+            progress["current_file"] = {
+                "name": event.get("description") or "snapshot files",
+                "downloaded": event.get("downloaded"),
+                "total": event.get("total"),
+                "percent": event.get("percent"),
+                "unit": event.get("unit"),
+                "updated_at": updated_at,
+            }
+            progress["overall"]["fetch"] = {
+                "downloaded": event.get("downloaded"),
+                "total": event.get("total"),
+                "percent": event.get("percent"),
+                "unit": event.get("unit"),
+                "description": event.get("description"),
+            }
+            return
         if event_type in {"failure", "failed", "error"}:
             progress["phase"] = "failed"
             item["error"] = str(event.get("error") or event.get("message") or event_type)
@@ -721,7 +740,11 @@ def _run_pull_in_process(
                             progress(partial_progress)
                             last_activity_at = now
                             continue
-                if now - last_activity_at >= stall_timeout_seconds:
+                stall_timeout = _effective_stall_timeout(
+                    last_progress,
+                    default_timeout=stall_timeout_seconds,
+                )
+                if now - last_activity_at >= stall_timeout:
                     _terminate_process(process)
                     raise RuntimeError(
                         _stall_error_message(
@@ -755,6 +778,28 @@ def _run_pull_in_process(
             _terminate_process(process)
 
 
+
+def _effective_stall_timeout(
+    last_progress: dict[str, Any] | None,
+    *,
+    default_timeout: float,
+) -> float:
+    if not isinstance(last_progress, dict):
+        return default_timeout
+    progress_type = last_progress.get("type")
+    downloaded = last_progress.get("downloaded")
+    total = last_progress.get("total")
+    if progress_type == "fetch-progress":
+        return max(default_timeout, FINALISING_STALL_TIMEOUT_SECONDS)
+    if (
+        isinstance(downloaded, (int, float))
+        and isinstance(total, (int, float))
+        and total > 0
+        and downloaded >= total
+    ):
+        return max(default_timeout, FINALISING_STALL_TIMEOUT_SECONDS)
+    return default_timeout
+
 def _cache_partial_progress_event(
     ref: HubRef,
     last_progress: dict[str, Any] | None,
@@ -783,6 +828,7 @@ def _cache_partial_progress_event(
     largest_partial: tuple[int, str] | None = None
     planned_blobs: set[str] = set()
     matched_partials: set[Path] = set()
+    ignored_partials: set[Path] = set()
 
     for file in files:
         if not isinstance(file, dict):
@@ -799,6 +845,7 @@ def _cache_partial_progress_event(
             counted = min(completed, expected_size) if isinstance(expected_size, int) else completed
             downloaded += counted
             cached_bytes += counted
+            ignored_partials.update(blobs_dir.glob(f"{blob_id}*.incomplete"))
             continue
 
         matched_partial_size = 0
@@ -814,12 +861,15 @@ def _cache_partial_progress_event(
             partial_bytes += counted
 
     for partial in blobs_dir.glob("*.incomplete"):
-        if partial in matched_partials:
+        if partial in matched_partials or partial in ignored_partials:
             continue
         size = _file_size(partial)
-        downloaded += size
-        untracked_partial_bytes += size
-        if largest_partial is None or size > largest_partial[0]:
+        counted = size
+        if isinstance(total, int) and total > 0:
+            counted = max(0, min(size, total - downloaded))
+        downloaded += counted
+        untracked_partial_bytes += counted
+        if counted > 0 and (largest_partial is None or size > largest_partial[0]):
             largest_partial = (size, partial.name)
 
     if downloaded <= 0:

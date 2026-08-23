@@ -221,6 +221,48 @@ def test_cache_partial_progress_event_counts_completed_snapshot_files_when_blob_
     assert event["path"] == "active-sha.worker.incomplete"
 
 
+
+def test_cache_partial_progress_event_ignores_stale_partials_for_completed_blob(monkeypatch, tmp_path):
+    monkeypatch.setattr(queue_module.hub, "HF_HUB_CACHE", str(tmp_path))
+    blobs = tmp_path / "models--Qwen--Qwen3" / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / "complete").write_bytes(b"x" * 70)
+    (blobs / "complete.worker.incomplete").write_bytes(b"x" * 40)
+    (blobs / "active.worker.incomplete").write_bytes(b"x" * 5)
+
+    event = queue_module._cache_partial_progress_event(
+        hub.HubRef(repo_id="Qwen/Qwen3"),
+        {
+            "type": "model-plan",
+            "total_bytes": 100,
+            "files": [
+                {"path": "first.safetensors", "size": 70, "blob_id": "complete"},
+                {"path": "second.safetensors", "size": 30, "blob_id": "missing"},
+            ],
+        },
+    )
+
+    assert event["downloaded"] == 75
+    assert event["percent"] == 75.0
+    assert event["cached_bytes"] == 70
+    assert event["untracked_partial_bytes"] == 5
+    assert event["path"] == "active.worker.incomplete"
+
+
+def test_effective_stall_timeout_extends_for_finalising_progress():
+    assert queue_module._effective_stall_timeout(
+        {"type": "fetch-progress", "downloaded": 30, "total": 37},
+        default_timeout=1,
+    ) == queue_module.FINALISING_STALL_TIMEOUT_SECONDS
+    assert queue_module._effective_stall_timeout(
+        {"type": "download-progress", "downloaded": 100, "total": 100},
+        default_timeout=1,
+    ) == queue_module.FINALISING_STALL_TIMEOUT_SECONDS
+    assert queue_module._effective_stall_timeout(
+        {"type": "download-progress", "downloaded": 50, "total": 100},
+        default_timeout=1,
+    ) == 1
+
 def test_add_transfer_estimates_derives_speed_and_eta_from_cache_samples():
     event = {
         "type": "download-progress",

@@ -470,7 +470,7 @@
           <div><dt>Speed</dt><dd>${formatSpeed(overall.bytes_per_second)}</dd></div>
           <div><dt>ETA</dt><dd>${formatDuration(overall.eta_seconds)}</dd></div>
           <div><dt>Current file</dt><dd>${current ? escapeHtml(currentFileLabel(current)) : "None"}</dd></div>
-          <div><dt>File progress</dt><dd>${current ? `${formatBytes(current.downloaded)} / ${formatBytes(current.total)}` : "None"}</dd></div>
+          <div><dt>File progress</dt><dd>${current ? formatCurrentProgress(current) : "None"}</dd></div>
           <div><dt>File update</dt><dd>${current ? formatTimestamp(current.updated_at || item.updated_at) : "unknown"}</dd></div>
           <div><dt>Last update</dt><dd>${formatTimestamp(item.updated_at)}</dd></div>
         </dl>
@@ -571,6 +571,10 @@
     const lastUpdate = current.updated_at || item.updated_at;
     const quietSeconds = progressQuietSeconds(item, progress, current);
     const parts = [`${titleCase(phase)} ${subject}`];
+    const fetchLine = fetchProgressLine(overall, current);
+    if (fetchLine) {
+      parts.push(fetchLine);
+    }
     if (lastUpdate) {
       parts.push(`last update ${formatTimestamp(lastUpdate)}`);
     }
@@ -599,6 +603,25 @@
 
   function transferModeLabel(item) {
     return item && item.xet_enabled ? "Xet" : "Plain HTTP";
+  }
+
+  function fetchProgressLine(overall, current) {
+    const fetch = (overall && overall.fetch) || null;
+    const source = fetch || (current && current.unit && current.unit !== "B" ? current : null);
+    if (!source || source.downloaded === null || source.downloaded === undefined || source.total === null || source.total === undefined) {
+      return "";
+    }
+    const unit = source.unit === "it" ? "files" : source.unit || "items";
+    const percent = formatPercent(source.percent);
+    return `${source.downloaded} / ${source.total} ${unit}${percent !== "calculating" ? ` (${percent})` : ""}`;
+  }
+
+  function formatCurrentProgress(current) {
+    if (current.unit && current.unit !== "B") {
+      const unit = current.unit === "it" ? "files" : current.unit;
+      return `${current.downloaded || 0} / ${current.total || "?"} ${unit}`;
+    }
+    return `${formatBytes(current.downloaded)} / ${formatBytes(current.total)}`;
   }
 
   function currentFileLabel(current) {
@@ -859,6 +882,8 @@
     cacheActionLabel,
     downloadStatusLine,
     progressBreakdown,
+    fetchProgressLine,
+    formatCurrentProgress,
     transferModeLabel,
     cleanupSummaryLine,
     queueControlState,

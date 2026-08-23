@@ -853,6 +853,45 @@ def test_pull_snapshot_emits_aggregate_byte_progress_from_snapshot_tqdm(monkeypa
     ]
 
 
+
+def test_pull_snapshot_emits_fetch_progress_from_snapshot_tqdm(monkeypatch, tmp_path):
+    def fake_snapshot_download(**kwargs):
+        progress_bar = kwargs["tqdm_class"](
+            total=37,
+            initial=30,
+            unit="it",
+            desc="Fetching 37 files",
+        )
+        progress_bar.update(1)
+        progress_bar.refresh()
+        progress_bar.close()
+
+        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir.mkdir(parents=True, exist_ok=True)
+        (local_dir / "weights.bin").write_bytes(b"123")
+        return str(local_dir)
+
+    install_fake_hub(
+        monkeypatch,
+        [{"path": "weights.bin", "size": 3, "blob_id": "weights"}],
+        fake_snapshot_download,
+    )
+    events = []
+
+    hub.pull_snapshot(
+        hub.HubRef(repo_id="Qwen/Qwen3"),
+        library_dir=tmp_path,
+        progress=events.append,
+    )
+
+    fetch_events = [event for event in events if event["type"] == "fetch-progress"]
+    assert fetch_events
+    assert fetch_events[-1]["repo_id"] == "Qwen/Qwen3"
+    assert fetch_events[-1]["downloaded"] == 31
+    assert fetch_events[-1]["total"] == 37
+    assert fetch_events[-1]["unit"] == "it"
+    assert fetch_events[-1]["description"] == "Fetching 37 files"
+
 def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
     ticks = iter([0.0, 0.0, 0.1, 0.2, 0.3, 0.4])
     monkeypatch.setattr(hub.time, "monotonic", lambda: next(ticks, 0.4))
