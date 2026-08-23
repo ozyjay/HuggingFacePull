@@ -118,13 +118,15 @@
     const snapshot = state.snapshot || {};
     const items = Array.isArray(snapshot.items) ? snapshot.items : [];
     const installed = Array.isArray(snapshot.installed_models) ? snapshot.installed_models : [];
+    const cached = Array.isArray(snapshot.cached_models) ? snapshot.cached_models : [];
+    const installedRows = installedSnapshotRows(installed, cached);
     const selected = selectedItem(items);
 
     els.runtimeSummary.textContent = snapshot.library_dir
       ? `Server: ${window.location.origin} | PID: ${snapshot.server_pid || "unknown"} | Metadata: ${snapshot.library_dir} | Model cache: ~/.cache/huggingface/hub | Hub endpoint: ${snapshot.endpoint || "unknown"}`
       : "Loading local state...";
     els.queueSummary.textContent = `${items.length} item${items.length === 1 ? "" : "s"} | ${queueRunState(snapshot)}`;
-    els.installedSummary.textContent = `${installed.length} snapshot${installed.length === 1 ? "" : "s"}`;
+    els.installedSummary.textContent = `${installedRows.length} snapshot${installedRows.length === 1 ? "" : "s"}`;
     els.searchStatus.textContent = state.searchError || `${state.searchResults.length} result${state.searchResults.length === 1 ? "" : "s"}`;
     els.detailStatus.textContent = selected ? selected.status : "";
     els.notice.textContent = state.notice;
@@ -134,7 +136,7 @@
     renderSearchResults();
     renderFileResults();
     renderQueue(items);
-    renderInstalled(installed);
+    renderInstalled(installedRows);
     renderDetail(selected);
     renderCleanup();
   }
@@ -418,9 +420,11 @@
       <article class="installed-row">
         <div>
           <strong>${escapeHtml(item.repo_id)}</strong>
-          <small>${escapeHtml(item.revision || "main")} | ${formatBytes(item.size)} | ${escapeHtml(item.snapshot_path || "")}</small>
+          <small>${escapeHtml(item.revision || "main")} | ${item.display_source === "metadata" ? "HuggingFacePull record" : "HF cache"} | ${formatBytes(item.size)} | ${escapeHtml(item.snapshot_path || "")}</small>
         </div>
-        <button type="button" class="danger" data-remove-installed="${escapeAttr(item.repo_id)}" data-revision="${escapeAttr(item.revision || "main")}" data-repo-type="${escapeAttr(item.repo_type || "model")}">Delete record</button>
+        ${item.display_source === "metadata"
+          ? `<button type="button" class="danger" data-remove-installed="${escapeAttr(item.repo_id)}" data-revision="${escapeAttr(item.revision || "main")}" data-repo-type="${escapeAttr(item.repo_type || "model")}">Delete record</button>`
+          : `<span class="muted">Available locally</span>`}
       </article>
     `).join("");
 
@@ -716,6 +720,31 @@
     });
   }
 
+  function installedSnapshotRows(installed, cached) {
+    const seen = new Set();
+    const rows = [];
+    for (const [items, displaySource] of [
+      [installed || [], "metadata"],
+      [cached || [], "huggingface_cache"],
+    ]) {
+      for (const item of items) {
+        const repoId = item && item.repo_id;
+        if (!repoId) {
+          continue;
+        }
+        const revision = item.revision || "main";
+        const repoType = item.repo_type || "model";
+        const key = `${repoType}:${repoId}@${revision}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        rows.push({ ...item, revision, repo_type: repoType, display_source: displaySource });
+      }
+    }
+    return rows;
+  }
+
   function cacheActionLabel(installState) {
     if (installState === "cached") {
       return "Add from cache";
@@ -879,6 +908,7 @@
     isInstalledSnapshot,
     snapshotInstallState,
     availableCachedSnapshots,
+    installedSnapshotRows,
     cacheActionLabel,
     downloadStatusLine,
     progressBreakdown,

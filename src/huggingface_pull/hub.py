@@ -174,6 +174,7 @@ def installed_models(library_dir: Path) -> list[dict[str, Any]]:
             continue
         if "repo_id" not in metadata or "revision" not in metadata:
             continue
+        metadata = _metadata_with_current_cache_path(metadata)
         skip_reason = _installed_metadata_skip_reason(metadata)
         if skip_reason is not None:
             _log(
@@ -189,6 +190,40 @@ def installed_models(library_dir: Path) -> list[dict[str, Any]]:
         installed,
         key=lambda item: (str(item["repo_id"]).lower(), str(item["revision"])),
     )
+
+
+def _metadata_with_current_cache_path(metadata: dict[str, Any]) -> dict[str, Any]:
+    configured_path = metadata.get("snapshot_path")
+    if not isinstance(configured_path, str) or not configured_path:
+        return metadata
+
+    snapshot_path = Path(configured_path)
+    if snapshot_path.exists() or snapshot_path.name in {"", ".", ".."}:
+        return metadata
+
+    repo_id = metadata.get("repo_id")
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        return metadata
+    prefix = {
+        "dataset": "datasets",
+        "space": "spaces",
+    }.get(metadata.get("repo_type", "model"), "models")
+    snapshots_dir = (
+        Path(HF_HUB_CACHE)
+        / f"{prefix}--{safe_repo_dir_name(repo_id)}"
+        / "snapshots"
+    )
+    candidate = snapshots_dir / snapshot_path.name
+    try:
+        candidate.resolve().relative_to(snapshots_dir.resolve())
+    except (OSError, ValueError):
+        return metadata
+    if not candidate.is_dir():
+        return metadata
+
+    relocated = dict(metadata)
+    relocated["snapshot_path"] = str(candidate)
+    return relocated
 
 
 def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any]]:
