@@ -206,6 +206,7 @@ install_macos_app() {
     local staging_app="$root/build/HuggingFacePullMac.app"
     local backend_dir="$staging_app/Contents/Resources/backend"
     local backend_venv="$backend_dir/.venv"
+    local asset_catalog="$mac_root/Assets.xcassets"
     local applications_dir="$HOME/Applications"
     local installed_app="$applications_dir/HuggingFacePullMac.app"
     local bin_path
@@ -215,6 +216,7 @@ install_macos_app() {
     [[ -f "$mac_root/Package.swift" ]] || die "Mac app package not found: $mac_root"
     [[ -f "$mac_root/Info.plist" ]] || die "Mac app Info.plist template not found"
     [[ -f "$mac_root/HuggingFacePullMac-launcher.sh" ]] || die "Mac app launcher template not found"
+    [[ -d "$asset_catalog/AppIcon.appiconset" ]] || die "Mac app icon assets not found"
 
     run swift build --configuration release --package-path "$mac_root" --product HuggingFacePullMac
     bin_path="$(swift build --configuration release --package-path "$mac_root" --show-bin-path)"
@@ -225,6 +227,7 @@ install_macos_app() {
     run install -m 755 "$bin_path/HuggingFacePullMac" "$staging_app/Contents/MacOS/HuggingFacePullMac.bin"
     run install -m 755 "$mac_root/HuggingFacePullMac-launcher.sh" "$staging_app/Contents/MacOS/HuggingFacePullMac"
     run install -m 644 "$mac_root/Info.plist" "$staging_app/Contents/Info.plist"
+    run xcrun actool --compile "$staging_app/Contents/Resources" --output-partial-info-plist "$staging_app/Contents/Resources/asset-info.plist" --platform macosx --minimum-deployment-target 13.0 --app-icon AppIcon "$asset_catalog"
     run cp -R "$root/src" "$backend_dir/src"
 
     run "$python" -m venv --copies "$backend_venv"
