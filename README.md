@@ -37,6 +37,17 @@ same model family while keeping every repository available to queue separately.
 If a stale cached Hub token is rejected, public search retries anonymously;
 private repositories and downloads still require a valid Hugging Face login.
 
+## Run the Mac SwiftUI App
+
+```bash
+cd mac/HuggingFacePullMac
+swift run HuggingFacePullMac
+```
+
+The native Mac app starts the local FastAPI backend without opening a browser,
+then connects to `http://127.0.0.1:8019`. It supports the shared search, queue,
+Xet transfer, installed snapshot deletion, and cleanup APIs.
+
 ## Run the Desktop App
 
 The desktop app is an Electron wrapper around the same local FastAPI server and
