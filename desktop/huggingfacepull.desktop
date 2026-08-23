@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=HuggingFacePull
+Comment=Search and download Hugging Face model snapshots
+Exec=huggingfacepull
+Icon=huggingfacepull
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
+StartupWMClass=huggingfacepull

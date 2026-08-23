@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -39,6 +40,10 @@ def default_log_file() -> Path:
     configured = os.environ.get("HUGGINGFACE_PULL_LOG_FILE")
     if configured:
         return Path(configured).expanduser()
+    if sys.platform.startswith("linux"):
+        state_home = os.environ.get("XDG_STATE_HOME")
+        base_dir = Path(state_home).expanduser() if state_home else Path.home() / ".local" / "state"
+        return base_dir / APP_NAME / "app.log"
     return Path.home() / "Library" / "Logs" / APP_NAME / "app.log"
 
 

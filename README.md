@@ -47,14 +47,57 @@ npm install
 npm run desktop:start
 ```
 
-Build an unpacked desktop app with:
+Build a standalone Fedora/Linux x64 desktop folder with:
 
 ```bash
 npm run desktop:package
 ```
 
-The Electron app looks for the repo `.venv` first, so run `./scripts/install.sh`
-before starting it locally.
+The packaged app is written to `out/HuggingFacePull-linux-x64/` and can be run
+from that folder with:
+
+```bash
+./out/HuggingFacePull-linux-x64/huggingfacepull
+```
+
+On Fedora, build and install the desktop RPM in one step:
+
+```bash
+./scripts/package-install-fedora.sh
+```
+
+On a new Fedora development machine, the script can install its build tools too:
+
+```bash
+./scripts/package-install-fedora.sh --install-build-deps
+```
+
+Pass `--yes` to make the `dnf` operations non-interactive. The script runs
+`npm ci`, builds the bundled desktop app and backend, creates the RPM, and then
+installs (or reinstalls) that exact artifact. Because local development RPMs are
+unsigned, the script disables signature checking for that command-line RPM only;
+packages from configured repositories are still checked. To reuse an existing
+`node_modules` directory, pass `--skip-npm-ci`.
+
+The equivalent manual commands are:
+
+```bash
+sudo dnf install rpm-build
+npm ci
+npm run desktop:package:rpm
+sudo dnf --setopt=localpkg_gpgcheck=0 install ./out/huggingfacepull-0.1.0-1.*.x86_64.rpm
+```
+
+The RPM installs the bundled app under `/opt/huggingfacepull`, adds a command at
+`/usr/bin/huggingfacepull`, and registers HuggingFacePull in the desktop app menu.
+In the desktop app, use **Storage → Choose folder…** to select the Hugging Face
+cache directory. The selection is remembered per user and takes effect after the
+automatic app restart; existing cache contents are not moved.
+
+Packaging creates `build/backend/.venv`, installs the runtime Python backend
+there, and copies it into `resources/backend` so the packaged app does not need
+the repo checkout or a manually prepared `.venv`. Local development still uses
+the repo `.venv`, so run `./scripts/install.sh` before `npm run desktop:start`.
 
 ## Pull a Repo
 

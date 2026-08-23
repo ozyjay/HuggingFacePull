@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -9,9 +9,38 @@ const HOST = "127.0.0.1";
 const DEFAULT_PORT = 8019;
 const SERVER_READY_TIMEOUT_MS = 30000;
 const SERVER_POLL_INTERVAL_MS = 250;
+const PYTHON_WEB_LAUNCHER = "import sys; from huggingface_pull.cli import run_web; raise SystemExit(run_web(sys.argv[1:]))";
+
+app.setName("HuggingFacePull");
+if (process.platform === "linux") {
+  app.setDesktopName("huggingfacepull.desktop");
+  app.commandLine.appendSwitch("class", "huggingfacepull");
+}
 
 let backendProcess = null;
 let mainWindow = null;
+
+function settingsPath() {
+  return path.join(app.getPath("userData"), "settings.json");
+}
+
+function readSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeSettings(settings) {
+  fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
+  fs.writeFileSync(settingsPath(), `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+}
+
+function configuredCacheDirectory() {
+  const configured = readSettings().hfHubCache;
+  return typeof configured === "string" && configured.trim() ? configured : null;
+}
 
 function projectRoot() {
   return path.resolve(__dirname, "..");
@@ -26,22 +55,80 @@ function executableExists(filePath) {
   }
 }
 
+function commandExists(command) {
+  return !command.includes(path.sep) || executableExists(command);
+}
+
+function venvBinDir(venvDir) {
+  return path.join(venvDir, process.platform === "win32" ? "Scripts" : "bin");
+}
+
+function venvScript(venvDir, scriptName) {
+  const executableName = process.platform === "win32" ? `${scriptName}.exe` : scriptName;
+  return path.join(venvBinDir(venvDir), executableName);
+}
+
+function venvPython(venvDir) {
+  const executableName = process.platform === "win32" ? "python.exe" : "python";
+  return path.join(venvBinDir(venvDir), executableName);
+}
+
+function pythonBackendCandidate(venvDir, cwd) {
+  const python = venvPython(venvDir);
+  if (!executableExists(python)) {
+    return null;
+  }
+  return {
+    command: python,
+    args: ["-c", PYTHON_WEB_LAUNCHER],
+    cwd,
+    label: python,
+  };
+}
+
+function scriptBackendCandidate(venvDir, cwd) {
+  const command = venvScript(venvDir, "hfpull-web");
+  if (!executableExists(command)) {
+    return null;
+  }
+  return {
+    command,
+    args: [],
+    cwd,
+    label: command,
+  };
+}
+
+function environmentBackendCandidate(root) {
+  if (!process.env.HFPULL_BACKEND_COMMAND) {
+    return null;
+  }
+  return {
+    command: process.env.HFPULL_BACKEND_COMMAND,
+    args: [],
+    cwd: root,
+    label: process.env.HFPULL_BACKEND_COMMAND,
+  };
+}
+
 function backendCandidates(root) {
-  const scriptName = process.platform === "win32" ? "hfpull-web.exe" : "hfpull-web";
+  const packagedBackend = path.join(process.resourcesPath || root, "backend");
+  const packagedVenv = path.join(packagedBackend, ".venv");
+  const devVenv = path.join(root, ".venv");
+
   return [
-    path.join(root, ".venv", process.platform === "win32" ? "Scripts" : "bin", scriptName),
-    path.join(process.resourcesPath || root, "backend", ".venv", process.platform === "win32" ? "Scripts" : "bin", scriptName),
-    "hfpull-web",
-  ];
+    app.isPackaged ? pythonBackendCandidate(packagedVenv, packagedBackend) : null,
+    !app.isPackaged ? scriptBackendCandidate(devVenv, root) : null,
+    scriptBackendCandidate(packagedVenv, packagedBackend),
+    scriptBackendCandidate(devVenv, root),
+    environmentBackendCandidate(root),
+    { command: "hfpull-web", args: [], cwd: root, label: "hfpull-web" },
+  ].filter(Boolean);
 }
 
 function findBackendCommand(root) {
-  if (process.env.HFPULL_BACKEND_COMMAND) {
-    return process.env.HFPULL_BACKEND_COMMAND;
-  }
-
   for (const candidate of backendCandidates(root)) {
-    if (!candidate.includes(path.sep) || executableExists(candidate)) {
+    if (commandExists(candidate.command)) {
       return candidate;
     }
   }
@@ -158,22 +245,26 @@ async function backendPort() {
 }
 
 function startBackend(root, port) {
-  const command = findBackendCommand(root);
-  if (!command) {
-    throw new Error("Could not find hfpull-web. Run ./scripts/install.sh first.");
+  const backend = findBackendCommand(root);
+  if (!backend) {
+    throw new Error("Could not find hfpull-web. Run ./scripts/install.sh first, or rebuild the desktop package.");
   }
 
-  const args = ["--host", HOST, "--port", String(port), "--no-browser"];
+  const args = [...backend.args, "--host", HOST, "--port", String(port), "--no-browser"];
   const env = {
     ...process.env,
     HF_HUB_DISABLE_XET: "1",
   };
+  const cacheDirectory = configuredCacheDirectory();
+  if (cacheDirectory) {
+    env.HF_HUB_CACHE = cacheDirectory;
+  }
   delete env.HF_XET_HIGH_PERFORMANCE;
   delete env.HF_XET_CHUNK_CACHE_SIZE_BYTES;
   delete env.HF_XET_SHARD_CACHE_SIZE_LIMIT;
 
-  backendProcess = spawn(command, args, {
-    cwd: root,
+  backendProcess = spawn(backend.command, args, {
+    cwd: backend.cwd,
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -183,6 +274,9 @@ function startBackend(root, port) {
   });
   backendProcess.stderr.on("data", (chunk) => {
     process.stderr.write(`[hfpull-web] ${chunk}`);
+  });
+  backendProcess.on("error", (error) => {
+    process.stderr.write(`[hfpull-web] failed to start ${backend.label}: ${error.message}\n`);
   });
   backendProcess.on("exit", (code, signal) => {
     backendProcess = null;
@@ -212,7 +306,7 @@ function isAllowedAppUrl(targetUrl, appUrl) {
   }
 }
 
-function createWindow(appUrl) {
+async function createWindow(appUrl) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
@@ -224,6 +318,7 @@ function createWindow(appUrl) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
@@ -243,16 +338,46 @@ function createWindow(appUrl) {
     shell.openExternal(url);
   });
 
-  mainWindow.loadURL(appUrl);
+  // A reinstall can replace the local UI while Chromium retains the previous
+  // HTML and JavaScript. This app is entirely local, so a fresh cache is cheap
+  // and guarantees that the window matches its bundled backend.
+  await mainWindow.webContents.session.clearCache();
+  await mainWindow.loadURL(appUrl);
 }
+
+ipcMain.handle("select-hf-cache-directory", async () => {
+  const current = configuredCacheDirectory();
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Select Hugging Face cache directory",
+    defaultPath: current || app.getPath("home"),
+    buttonLabel: "Use this folder",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) {
+    return { changed: false, path: current };
+  }
+
+  const selected = path.resolve(result.filePaths[0]);
+  writeSettings({ ...readSettings(), hfHubCache: selected });
+  return { changed: selected !== current, path: selected };
+});
+
+ipcMain.handle("restart-for-cache-directory", () => {
+  app.relaunch();
+  app.quit();
+});
 
 async function main() {
   const root = projectRoot();
   let port = await backendPort();
   let ownsBackend = false;
+  const existingBackend = await probeExistingServer(port);
+  const reuseRequestedBackend = !app.isPackaged || Boolean(process.env.HFPULL_DESKTOP_PORT);
 
-  if (!(await probeExistingServer(port))) {
-    if (await portAcceptsConnections(port)) {
+  // Packaged releases must use their bundled backend. Reusing an older server
+  // on the default port can otherwise pair a new desktop shell with stale UI.
+  if (!existingBackend || !reuseRequestedBackend) {
+    if (existingBackend || await portAcceptsConnections(port)) {
       port = await findFreePort();
     }
     if (port !== DEFAULT_PORT) {
@@ -271,7 +396,7 @@ async function main() {
 
   const appUrl = `http://${HOST}:${port}/`;
 
-  createWindow(appUrl);
+  await createWindow(appUrl);
   mainWindow.on("closed", () => {
     mainWindow = null;
     if (ownsBackend) {

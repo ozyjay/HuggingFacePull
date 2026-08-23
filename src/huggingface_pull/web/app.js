@@ -23,6 +23,9 @@
   function bindElements() {
     [
       "runtimeSummary",
+      "desktopSettings",
+      "cacheDirectory",
+      "selectCacheDirectory",
       "startQueue",
       "pauseQueue",
       "stopAfterFile",
@@ -65,6 +68,10 @@
     els.inspectFiles.addEventListener("click", onInspectFiles);
     els.scanCleanup.addEventListener("click", () => onCleanup(false));
     els.deleteCleanup.addEventListener("click", () => onCleanup(true));
+    if (window.hfpullDesktop) {
+      els.desktopSettings.hidden = false;
+      els.selectCacheDirectory.addEventListener("click", onSelectCacheDirectory);
+    }
   }
 
   async function api(path, options) {
@@ -125,6 +132,9 @@
     els.runtimeSummary.textContent = snapshot.library_dir
       ? `Server: ${window.location.origin} | PID: ${snapshot.server_pid || "unknown"} | Metadata: ${snapshot.library_dir} | Model cache: ${snapshot.hf_hub_cache || "unknown"} | Hub endpoint: ${snapshot.endpoint || "unknown"}`
       : "Loading local state...";
+    if (els.cacheDirectory) {
+      els.cacheDirectory.textContent = snapshot.hf_hub_cache || "Loading...";
+    }
     els.queueSummary.textContent = `${items.length} item${items.length === 1 ? "" : "s"} | ${queueRunState(snapshot)}`;
     els.installedSummary.textContent = `${installedRows.length} snapshot${installedRows.length === 1 ? "" : "s"}`;
     els.searchStatus.textContent = state.searchError || `${state.searchResults.length} result${state.searchResults.length === 1 ? "" : "s"}`;
@@ -210,6 +220,20 @@
     } catch (error) {
       showNotice(error.message, true);
       render();
+    }
+  }
+
+  async function onSelectCacheDirectory() {
+    try {
+      const result = await window.hfpullDesktop.selectCacheDirectory();
+      if (!result || !result.changed) {
+        return;
+      }
+      els.cacheDirectory.textContent = result.path;
+      showNotice("Restarting with the selected Hugging Face cache directory…");
+      await window.hfpullDesktop.restartForCacheDirectory();
+    } catch (error) {
+      showNotice(error.message, true);
     }
   }
 

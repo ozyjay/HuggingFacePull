@@ -199,6 +199,14 @@ small {
   color: var(--muted);
 }
 
+.path-value {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-soft);
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+}
+
 .inline-form,
 .stack-form {
   display: grid;
