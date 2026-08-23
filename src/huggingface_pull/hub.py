@@ -539,6 +539,60 @@ def remove_installed_model(library_dir: Path, ref: HubRef) -> None:
     shutil.rmtree(root)
 
 
+def delete_installed_model(library_dir: Path, ref: HubRef) -> int:
+    """Delete a cached snapshot and its HuggingFacePull metadata record."""
+    from huggingface_hub import scan_cache_dir
+
+    marker = metadata_path(library_dir, ref)
+    snapshot_path: Path | None = None
+    if marker.is_file():
+        try:
+            metadata = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metadata = None
+        if isinstance(metadata, dict) and isinstance(metadata.get("snapshot_path"), str):
+            snapshot_path = Path(metadata["snapshot_path"])
+
+    cache_root = Path(HF_HUB_CACHE)
+    if not cache_root.is_dir():
+        raise KeyError(ref.repo_id)
+    cache_info = scan_cache_dir(cache_root)
+    cached_repo = next(
+        (
+            repo
+            for repo in cache_info.repos
+            if repo.repo_id == ref.repo_id and repo.repo_type == ref.repo_type
+        ),
+        None,
+    )
+    if cached_repo is None:
+        raise KeyError(ref.repo_id)
+
+    revision = next(
+        (
+            cached_revision
+            for cached_revision in cached_repo.revisions
+            if ref.revision == cached_revision.commit_hash
+            or ref.revision in cached_revision.refs
+            or (
+                snapshot_path is not None
+                and snapshot_path.name == cached_revision.commit_hash
+            )
+        ),
+        None,
+    )
+    if revision is None:
+        raise KeyError(ref.repo_id)
+
+    strategy = cache_info.delete_revisions(revision.commit_hash)
+    freed_size = strategy.expected_freed_size
+    strategy.execute()
+
+    if marker.exists():
+        remove_installed_model(library_dir, ref)
+    return freed_size
+
+
 def _is_partial_file(path: Path) -> bool:
     return ".incomplete" in path.name or ".tmp" in path.name
 

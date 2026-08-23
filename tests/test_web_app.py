@@ -85,6 +85,10 @@ def test_search_install_state_matches_repo_revision_and_type():
 
         const source = fs.readFileSync("src/huggingface_pull/web/app.js", "utf8");
         assert(source.includes("Server: ${window.location.origin}"));
+        assert(source.includes("Remove from list"));
+        assert(source.includes("Delete from disk"));
+        assert(source.includes("window.confirm(`Remove"));
+        assert(source.includes("window.confirm(`Permanently delete"));
 
         const context = {
           window: {},

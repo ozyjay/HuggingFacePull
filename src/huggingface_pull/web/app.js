@@ -515,9 +515,12 @@
           <strong>${escapeHtml(item.repo_id)}</strong>
           <small>${escapeHtml(item.revision || "main")} | ${item.display_source === "metadata" ? "HuggingFacePull record" : "HF cache"} | ${formatBytes(item.size)} | ${escapeHtml(item.snapshot_path || "")}</small>
         </div>
-        ${item.display_source === "metadata"
-          ? `<button type="button" class="danger" data-remove-installed="${escapeAttr(item.repo_id)}" data-revision="${escapeAttr(item.revision || "main")}" data-repo-type="${escapeAttr(item.repo_type || "model")}">Delete record</button>`
-          : `<span class="muted">Available locally</span>`}
+        <div class="row-actions">
+          ${item.display_source === "metadata"
+            ? `<button type="button" class="secondary" data-remove-installed="${escapeAttr(item.repo_id)}" data-revision="${escapeAttr(item.revision || "main")}" data-repo-type="${escapeAttr(item.repo_type || "model")}">Remove from list</button>`
+            : ""}
+          <button type="button" class="danger" data-delete-installed="${escapeAttr(item.repo_id)}" data-revision="${escapeAttr(item.revision || "main")}" data-repo-type="${escapeAttr(item.repo_type || "model")}">Delete from disk</button>
+        </div>
       </article>
     `).join("");
 
@@ -528,9 +531,32 @@
           revision: button.getAttribute("data-revision") || "main",
           repo_type: button.getAttribute("data-repo-type") || "model",
         };
+        if (!window.confirm(`Remove ${payload.repo_id}@${payload.revision} from the installed list?\n\nThe cached model files will stay on disk.`)) {
+          return;
+        }
         try {
           await api("/api/installed/remove", { method: "POST", body: JSON.stringify(payload) });
-          showNotice(`Deleted ${payload.repo_id}`);
+          showNotice(`Removed ${payload.repo_id} from the installed list`);
+          await refresh();
+        } catch (error) {
+          showNotice(error.message, true);
+        }
+      });
+    });
+
+    els.installedList.querySelectorAll("[data-delete-installed]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const payload = {
+          repo_id: button.getAttribute("data-delete-installed"),
+          revision: button.getAttribute("data-revision") || "main",
+          repo_type: button.getAttribute("data-repo-type") || "model",
+        };
+        if (!window.confirm(`Permanently delete ${payload.repo_id}@${payload.revision} from disk?\n\nUnshared cached files will be removed. This cannot be undone.`)) {
+          return;
+        }
+        try {
+          const result = await api("/api/installed/delete", { method: "POST", body: JSON.stringify(payload) });
+          showNotice(`Deleted ${payload.repo_id} from disk; freed ${formatBytes(result.freed_size)}`);
           await refresh();
         } catch (error) {
           showNotice(error.message, true);

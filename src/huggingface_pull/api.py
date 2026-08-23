@@ -12,6 +12,7 @@ from .hub import (
     HubRef,
     cached_hub_models,
     cleanup_library,
+    delete_installed_model,
     installed_models,
     partial_cached_hub_models,
     remove_installed_model,
@@ -119,6 +120,16 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return {"ok": True}
+
+    @app.post("/api/installed/delete")
+    async def delete_installed(payload: InstalledRemoveRequest) -> dict[str, Any]:
+        try:
+            freed_size = delete_installed_model(
+                queue.library_dir, HubRef(**payload.model_dump())
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return {"ok": True, "freed_size": freed_size}
 
     @app.post("/api/cleanup/scan")
     def cleanup_scan(payload: CleanupRequest = CleanupRequest()) -> dict[str, Any]:

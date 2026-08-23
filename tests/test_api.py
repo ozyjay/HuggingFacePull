@@ -268,6 +268,28 @@ def test_installed_remove_404_for_missing_model(tmp_path):
     assert response.status_code == 404
 
 
+def test_installed_delete_removes_cached_snapshot(monkeypatch, tmp_path):
+    import huggingface_pull.api as api_module
+
+    calls = []
+
+    def fake_delete_installed_model(library_dir, ref):
+        calls.append((library_dir, ref))
+        return 1024
+
+    monkeypatch.setattr(api_module, "delete_installed_model", fake_delete_installed_model)
+    client = TestClient(create_app(library_dir=tmp_path))
+
+    response = client.post(
+        "/api/installed/delete",
+        json={"repo_id": "Qwen/Qwen3", "revision": "main", "repo_type": "model"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "freed_size": 1024}
+    assert calls == [(tmp_path, HubRef(repo_id="Qwen/Qwen3"))]
+
+
 def test_cleanup_scan_and_delete_delegate(monkeypatch, tmp_path):
     import huggingface_pull.api as api_module
 

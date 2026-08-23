@@ -98,6 +98,11 @@ HuggingFacePull keeps small `.huggingfacepull.json` metadata markers under
 `~/.cache/huggingfacepull/library`. Set `HUGGINGFACE_PULL_LIBRARY=/path/to/library`
 to move those metadata markers.
 
+In the web UI, **Remove from list** deletes only the HuggingFacePull metadata
+record and leaves the cached snapshot available locally. **Delete from disk**
+deletes the cached snapshot and its metadata record; cached blobs that are still
+used by another revision are preserved. Both actions require confirmation.
+
 ## Troubleshooting Downloads
 
 First verify the Hugging Face client path directly:
