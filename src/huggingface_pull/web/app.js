@@ -270,35 +270,128 @@
       return;
     }
 
-    els.searchResults.innerHTML = state.searchResults.map((result) => {
-      const repoId = result.repo_id || result.name || "";
-      const installState = snapshotInstallState(
-        (state.snapshot && state.snapshot.installed_models) || [],
-        (state.snapshot && state.snapshot.cached_models) || [],
-        (state.snapshot && state.snapshot.partial_cached_models) || [],
-        repoId,
-        els.revisionInput.value.trim() || "main",
-        els.repoTypeInput.value || "model",
-      );
-      const meta = [
-        result.pipeline_tag,
-        formatCount(result.downloads, "download"),
-        formatCount(result.likes, "like"),
-      ].filter(Boolean).join(" | ");
+    els.searchResults.innerHTML = groupSearchResults(state.searchResults).map((section) => {
+      if (section.type === "result") {
+        return renderSearchResultRow(section.result);
+      }
+      const count = section.results.length;
+      const accessibleLabel = `${section.label}, ${count} variants`;
       return `
-        <article class="result-row">
-          <div>
-            <strong>${escapeHtml(repoId)}</strong>
-            <small>${escapeHtml(meta || "Hub repo")}</small>
+        <section class="variant-group" aria-label="${escapeAttr(accessibleLabel)}">
+          <div class="variant-group-heading">
+            <strong>${escapeHtml(section.label)}</strong>
+            <span>${count} variants</span>
           </div>
-          ${installState === "installed"
-            ? `<button type="button" class="secondary" disabled>Installed</button>`
-            : `<button type="button" data-add-search="${escapeAttr(repoId)}" data-add-revision="${escapeAttr(els.revisionInput.value.trim() || "main")}" data-add-repo-type="${escapeAttr(els.repoTypeInput.value || "model")}">${cacheActionLabel(installState)}</button>`}
-        </article>
+          ${section.results.map(renderSearchResultRow).join("")}
+        </section>
       `;
     }).join("");
 
     bindSearchAddButtons();
+  }
+
+  function renderSearchResultRow(result) {
+    const repoId = result.repo_id || result.name || "";
+    const installState = snapshotInstallState(
+      (state.snapshot && state.snapshot.installed_models) || [],
+      (state.snapshot && state.snapshot.cached_models) || [],
+      (state.snapshot && state.snapshot.partial_cached_models) || [],
+      repoId,
+      els.revisionInput.value.trim() || "main",
+      els.repoTypeInput.value || "model",
+    );
+    const meta = [
+      result.pipeline_tag,
+      formatCount(result.downloads, "download"),
+      formatCount(result.likes, "like"),
+    ].filter(Boolean).join(" | ");
+    return `
+      <article class="result-row">
+        <div>
+          <strong>${escapeHtml(repoId)}</strong>
+          <small>${escapeHtml(meta || "Hub repo")}</small>
+        </div>
+        ${installState === "installed"
+          ? `<button type="button" class="secondary" disabled>Installed</button>`
+          : `<button type="button" data-add-search="${escapeAttr(repoId)}" data-add-revision="${escapeAttr(els.revisionInput.value.trim() || "main")}" data-add-repo-type="${escapeAttr(els.repoTypeInput.value || "model")}">${cacheActionLabel(installState)}</button>`}
+      </article>
+    `;
+  }
+
+  function groupSearchResults(results) {
+    const entries = (Array.isArray(results) ? results : []).map((result) => ({
+      result,
+      family: searchResultFamily(result),
+    }));
+    const families = new Map();
+
+    entries.forEach((entry) => {
+      if (!entry.family) {
+        return;
+      }
+      const family = families.get(entry.family.key) || {
+        label: entry.family.label,
+        results: [],
+      };
+      family.results.push(entry.result);
+      families.set(entry.family.key, family);
+    });
+
+    const emitted = new Set();
+    const sections = [];
+    entries.forEach((entry) => {
+      const family = entry.family && families.get(entry.family.key);
+      if (!family || family.results.length < 2) {
+        sections.push({ type: "result", result: entry.result });
+        return;
+      }
+      if (emitted.has(entry.family.key)) {
+        return;
+      }
+      emitted.add(entry.family.key);
+      sections.push({
+        type: "group",
+        key: entry.family.key,
+        label: family.label,
+        results: family.results.slice(),
+      });
+    });
+    return sections;
+  }
+
+  function searchResultFamily(result) {
+    const repoId = result && result.repo_id;
+    if (typeof repoId !== "string" || repoId !== repoId.trim() || /\s/.test(repoId)) {
+      return null;
+    }
+    const parts = repoId.split("/");
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      return null;
+    }
+
+    const nameTokens = parts[1].split(/[-_]+/).filter(Boolean);
+    const familyTokens = nameTokens.filter((token) => !isModelVariantToken(token));
+    if (!familyTokens.length) {
+      return null;
+    }
+
+    const familyName = familyTokens.join("-");
+    return {
+      key: `${parts[0].toLowerCase()}/${familyName.toLowerCase()}`,
+      label: `${parts[0]}/${familyName}`,
+    };
+  }
+
+  function isModelVariantToken(token) {
+    const value = String(token).toLowerCase();
+    const namedVariants = new Set([
+      "base", "chat", "instruct", "thinking", "it",
+      "gguf", "gptq", "awq", "mlx",
+      "bf16", "fp16", "fp8", "int4", "int8", "4bit", "8bit",
+    ]);
+    return namedVariants.has(value)
+      || /^(?:\d+(?:\.\d+)?x)?\d+(?:\.\d+)?[bmkt]$/.test(value)
+      || /^a\d+(?:\.\d+)?[bmkt]$/.test(value);
   }
 
   function bindSearchAddButtons() {
@@ -910,6 +1003,7 @@
     availableCachedSnapshots,
     installedSnapshotRows,
     cacheActionLabel,
+    groupSearchResults,
     downloadStatusLine,
     progressBreakdown,
     fetchProgressLine,
