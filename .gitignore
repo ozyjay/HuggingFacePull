@@ -9,6 +9,7 @@ venv/
 env/
 
 # Build artefacts
+.build/
 build/
 dist/
 *.egg-info/
