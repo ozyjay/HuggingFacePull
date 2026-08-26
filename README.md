@@ -125,6 +125,18 @@ Use `--dry-run` to verify the target path without downloading files:
 hfpull openai-community/gpt2 --allow config.json --dry-run
 ```
 
+Kernel repositories use the same queue and cache flow. Pin executable kernel code to an
+expected resolved commit and narrow the downloaded build variant, for example:
+
+```bash
+hfpull kernels-community/finegrained-fp8 --repo-type kernel --revision v3 \
+  --expected-commit fcf89a79d85eab78182c62fb986ed01f2cbf7422 \
+  --allow 'build/torch-rocm/*'
+```
+
+The request fails before download if the tag resolves to a different commit. The installed
+metadata records both the requested tag and verified resolved revision.
+
 ## Cleanup
 
 ```bash

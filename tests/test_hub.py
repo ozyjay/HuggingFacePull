@@ -1411,3 +1411,89 @@ def test_directory_size_sums_nested_files(tmp_path):
     (tmp_path / "nested" / "b.bin").write_bytes(b"45")
 
     assert hub.directory_size(tmp_path) == 5
+def test_kernel_ref_requires_a_valid_expected_commit():
+    with pytest.raises(ValueError, match="Expected commit"):
+        hub.HubRef(
+            repo_id="kernels-community/finegrained-fp8",
+            repo_type="kernel",
+            expected_commit="not-a-commit",
+        )
+
+
+def test_canonical_kernel_ref_includes_expected_commit():
+    ref = hub.HubRef(
+        repo_id="kernels-community/finegrained-fp8",
+        revision="v3",
+        repo_type="kernel",
+        expected_commit="a" * 40,
+        allow_patterns=["build/torch-rocm/*"],
+    )
+
+    assert "expected=" + "a" * 40 in hub.canonical_ref(ref)
+
+
+def test_pull_kernel_requires_resolved_commit_and_records_it(monkeypatch, tmp_path):
+    commit = "a" * 40
+    cache = tmp_path / "hub"
+
+    class FakeApi:
+        def __init__(self, endpoint):
+            self.endpoint = endpoint
+
+        def repo_info(self, repo_id, revision, repo_type, files_metadata, token):
+            assert (repo_id, revision, repo_type) == (
+                "kernels-community/finegrained-fp8",
+                "v3",
+                "kernel",
+            )
+            return SimpleNamespace(
+                sha=commit,
+            )
+
+        def list_repo_tree(self, repo_id, recursive, revision, repo_type, token):
+            return [SimpleNamespace(path="build/torch-rocm/matmul.py", size=6, blob_id="code")]
+
+    def fake_snapshot_download(**kwargs):
+        snapshot = cache / "kernels--kernels-community--finegrained-fp8" / "snapshots" / commit
+        source = snapshot / "build" / "torch-rocm" / "matmul.py"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"kernel")
+        return str(snapshot)
+
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+    monkeypatch.setattr(hub, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+    ref = hub.HubRef(
+        repo_id="kernels-community/finegrained-fp8",
+        revision="v3",
+        repo_type="kernel",
+        expected_commit=commit,
+        allow_patterns=["build/torch-rocm/*"],
+    )
+
+    hub.pull_snapshot(ref, library_dir=tmp_path / "library")
+
+    metadata = json.loads(hub.metadata_path(tmp_path / "library", ref).read_text())
+    assert metadata["expected_commit"] == commit
+    assert metadata["resolved_revision"] == commit
+
+
+def test_pull_kernel_rejects_unexpected_commit_before_download(monkeypatch, tmp_path):
+    class FakeApi:
+        def __init__(self, endpoint):
+            pass
+
+        def repo_info(self, repo_id, **kwargs):
+            return SimpleNamespace(sha="b" * 40, siblings=[])
+
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+    monkeypatch.setattr(hub, "snapshot_download", lambda **kwargs: pytest.fail("must not download"))
+    ref = hub.HubRef(
+        repo_id="kernels-community/finegrained-fp8",
+        revision="v3",
+        repo_type="kernel",
+        expected_commit="a" * 40,
+    )
+
+    with pytest.raises(RuntimeError, match="does not match expected commit"):
+        hub.pull_snapshot(ref, library_dir=tmp_path)

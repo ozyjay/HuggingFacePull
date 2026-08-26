@@ -5,14 +5,16 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, StringConstraints
 
 
-RepoType = Literal["model", "dataset", "space"]
+RepoType = Literal["model", "dataset", "space", "kernel"]
 RepoId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+CommitSha = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{40}$")]
 
 
 class QueueRequest(BaseModel):
     repo_id: RepoId
     revision: str = "main"
     repo_type: RepoType = "model"
+    expected_commit: CommitSha | None = None
     allow_patterns: list[str] = Field(default_factory=list)
     ignore_patterns: list[str] = Field(default_factory=list)
     local_dir: str | None = None

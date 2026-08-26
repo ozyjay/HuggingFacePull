@@ -36,6 +36,7 @@ MODEL_PAYLOAD_SUFFIXES = (
 SHARDED_PAYLOAD_RE = re.compile(
     r"^(?P<prefix>.+)-(?P<index>\d{5})-of-(?P<total>\d{5})(?P<suffix>\.[^.]+)$"
 )
+COMMIT_SHA_RE = re.compile(r"^[a-f0-9]{40}$")
 _LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
 HF_HUB_CACHE = str(default_hf_hub_cache())
 HfApi: Any | None = None
@@ -73,16 +74,24 @@ class HubRef:
     repo_id: str
     revision: str = "main"
     repo_type: str = "model"
+    expected_commit: str | None = None
     allow_patterns: tuple[str, ...] | list[str] = dataclasses.field(default_factory=tuple)
     ignore_patterns: tuple[str, ...] | list[str] = dataclasses.field(default_factory=tuple)
     xet_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if self.repo_type not in {"model", "dataset", "space", "kernel"}:
+            raise ValueError(f"Unsupported Hugging Face repository type: {self.repo_type}")
+        if self.expected_commit is not None and COMMIT_SHA_RE.fullmatch(self.expected_commit) is None:
+            raise ValueError("Expected commit must be a 40-character lowercase hexadecimal SHA")
 
 
 def canonical_ref(ref: HubRef) -> str:
     allow = ",".join(sorted(ref.allow_patterns))
     ignore = ",".join(sorted(ref.ignore_patterns))
     xet = "1" if ref.xet_enabled else "0"
-    return f"{ref.repo_type}:{ref.repo_id}@{ref.revision}?allow={allow}&ignore={ignore}&xet={xet}"
+    expected = f"expected={ref.expected_commit}&" if ref.expected_commit else ""
+    return f"{ref.repo_type}:{ref.repo_id}@{ref.revision}?{expected}allow={allow}&ignore={ignore}&xet={xet}"
 
 
 def safe_revision_dir_name(revision: str) -> str:
@@ -162,25 +171,49 @@ def repo_files(
     endpoint: str = DEFAULT_ENDPOINT,
     token: str | None = None,
 ) -> dict[str, Any]:
-    if ref.repo_type != "model":
-        raise NotImplementedError("Only model repository files are supported for now.")
-
     api = _hf_api_class()(endpoint=endpoint)
-    info = api.model_info(
-        ref.repo_id,
-        revision=ref.revision,
-        files_metadata=True,
-        token=token,
-    )
-    files = [
-        {
-            "path": sibling.rfilename,
-            "size": sibling.size,
-            "blob_id": sibling.blob_id,
-        }
-        for sibling in info.siblings
-    ]
+    if ref.repo_type == "model":
+        info = api.model_info(
+            ref.repo_id,
+            revision=ref.revision,
+            files_metadata=True,
+            token=token,
+        )
+    else:
+        info = api.repo_info(
+            ref.repo_id,
+            revision=ref.revision,
+            repo_type=ref.repo_type,
+            files_metadata=True,
+            token=token,
+        )
+    files = _repo_file_records(api, info, ref=ref, token=token)
     return {"repo_id": ref.repo_id, "revision": ref.revision, "files": files}
+
+
+def _repo_file_records(api: Any, info: Any, *, ref: HubRef, token: str | None) -> list[dict[str, Any]]:
+    siblings = getattr(info, "siblings", None)
+    if siblings is None:
+        siblings = api.list_repo_tree(
+            ref.repo_id,
+            recursive=True,
+            revision=ref.revision,
+            repo_type=ref.repo_type,
+            token=token,
+        )
+    files = []
+    for sibling in siblings:
+        path = getattr(sibling, "rfilename", None) or getattr(sibling, "path", None)
+        if path is None or not hasattr(sibling, "size"):
+            continue
+        files.append(
+            {
+                "path": path,
+                "size": getattr(sibling, "size", None),
+                "blob_id": getattr(sibling, "blob_id", None),
+            }
+        )
+    return files
 
 
 def installed_models(library_dir: Path) -> list[dict[str, Any]]:
@@ -227,6 +260,7 @@ def _metadata_with_current_cache_path(metadata: dict[str, Any]) -> dict[str, Any
     prefix = {
         "dataset": "datasets",
         "space": "spaces",
+        "kernel": "kernels",
     }.get(metadata.get("repo_type", "model"), "models")
     snapshots_dir = (
         Path(HF_HUB_CACHE)
@@ -252,47 +286,52 @@ def cached_hub_models(cache_dir: Path | str | None = None) -> list[dict[str, Any
     if not root.exists():
         return cached
 
-    for repo_dir in sorted(root.glob("models--*")):
-        if not repo_dir.is_dir():
-            continue
-        repo_id = _repo_id_from_cache_dir(repo_dir.name, "models")
-        if repo_id is None:
-            continue
-        snapshots = repo_dir / "snapshots"
-        if not snapshots.is_dir():
-            continue
-        refs = _cache_refs(repo_dir)
-        if refs:
-            for revision, commit in refs.items():
-                snapshot = snapshots / commit
-                skip_reason = _cache_snapshot_skip_reason(snapshot, require_model_payload=True)
+    for repo_type, prefix in (("model", "models"), ("kernel", "kernels")):
+        for repo_dir in sorted(root.glob(f"{prefix}--*")):
+            if not repo_dir.is_dir():
+                continue
+            repo_id = _repo_id_from_cache_dir(repo_dir.name, prefix)
+            if repo_id is None:
+                continue
+            snapshots = repo_dir / "snapshots"
+            if not snapshots.is_dir():
+                continue
+            refs = _cache_refs(repo_dir)
+            if refs:
+                for revision, commit in refs.items():
+                    snapshot = snapshots / commit
+                    skip_reason = _cache_snapshot_skip_reason(
+                        snapshot, require_model_payload=repo_type == "model"
+                    )
+                    if skip_reason is None:
+                        cached.append(
+                            {
+                                "repo_id": repo_id,
+                                "revision": revision,
+                                "repo_type": repo_type,
+                                "snapshot_path": str(snapshot),
+                                "source": "huggingface_cache",
+                            }
+                        )
+                    else:
+                        _log_cache_snapshot_skipped(repo_id, revision, snapshot, skip_reason)
+                continue
+            for snapshot in sorted(snapshots.iterdir()):
+                skip_reason = _cache_snapshot_skip_reason(
+                    snapshot, require_model_payload=repo_type == "model"
+                )
                 if skip_reason is None:
                     cached.append(
                         {
                             "repo_id": repo_id,
-                            "revision": revision,
-                            "repo_type": "model",
+                            "revision": snapshot.name,
+                            "repo_type": repo_type,
                             "snapshot_path": str(snapshot),
                             "source": "huggingface_cache",
                         }
                     )
                 else:
-                    _log_cache_snapshot_skipped(repo_id, revision, snapshot, skip_reason)
-            continue
-        for snapshot in sorted(snapshots.iterdir()):
-            skip_reason = _cache_snapshot_skip_reason(snapshot, require_model_payload=True)
-            if skip_reason is None:
-                cached.append(
-                    {
-                        "repo_id": repo_id,
-                        "revision": snapshot.name,
-                        "repo_type": "model",
-                        "snapshot_path": str(snapshot),
-                        "source": "huggingface_cache",
-                    }
-                )
-            else:
-                _log_cache_snapshot_skipped(repo_id, snapshot.name, snapshot, skip_reason)
+                    _log_cache_snapshot_skipped(repo_id, snapshot.name, snapshot, skip_reason)
     return cached
 
 
@@ -776,21 +815,29 @@ def pull_snapshot(
 
     configure_xet(ref.xet_enabled)
     api = _hf_api_class()(endpoint=endpoint)
-    info = api.model_info(
-        ref.repo_id,
-        revision=ref.revision,
-        files_metadata=True,
-        token=token,
-    )
+    if ref.repo_type == "model":
+        info = api.model_info(
+            ref.repo_id,
+            revision=ref.revision,
+            files_metadata=True,
+            token=token,
+        )
+    else:
+        info = api.repo_info(
+            ref.repo_id,
+            revision=ref.revision,
+            repo_type=ref.repo_type,
+            files_metadata=True,
+            token=token,
+        )
+    resolved_revision = str(getattr(info, "sha", "") or "")
+    if ref.expected_commit is not None and resolved_revision != ref.expected_commit:
+        raise RuntimeError(
+            f"Resolved commit {resolved_revision or 'unknown'} does not match expected commit "
+            f"{ref.expected_commit}"
+        )
     files = _filter_repo_files(
-        [
-            {
-                "path": sibling.rfilename,
-                "size": sibling.size,
-                "blob_id": getattr(sibling, "blob_id", None),
-            }
-            for sibling in info.siblings
-        ],
+        _repo_file_records(api, info, ref=ref, token=token),
         allow_patterns=ref.allow_patterns,
         ignore_patterns=ref.ignore_patterns,
     )
@@ -852,6 +899,9 @@ def pull_snapshot(
         "files": files,
         "xet_enabled": ref.xet_enabled,
     }
+    if ref.expected_commit is not None:
+        metadata["expected_commit"] = ref.expected_commit
+        metadata["resolved_revision"] = resolved_revision or snapshot_path.name
     marker.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
 
     if progress is not None:

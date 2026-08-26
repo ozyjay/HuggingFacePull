@@ -67,10 +67,10 @@ def create_app(
         revision: str = "main",
         repo_type: str = "model",
     ) -> dict[str, Any]:
-        if repo_type != "model":
+        if repo_type not in {"model", "kernel"}:
             raise HTTPException(
                 status_code=400,
-                detail="File listing currently supports model repos only.",
+                detail="File listing supports model and kernel repos only.",
             )
         return repo_files(
             HubRef(repo_id=repo_id, revision=revision, repo_type=repo_type),

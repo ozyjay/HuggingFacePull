@@ -25,10 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--revision", default="main")
     parser.add_argument(
         "--repo-type",
-        choices=["model", "dataset", "space"],
+        choices=["model", "dataset", "space", "kernel"],
         default="model",
     )
     parser.add_argument("--allow", action="append", default=[], help="Glob pattern to include.")
+    parser.add_argument(
+        "--expected-commit",
+        help="Require the requested revision to resolve to this 40-character lowercase commit SHA.",
+    )
     parser.add_argument("--ignore", action="append", default=[], help="Glob pattern to exclude.")
     parser.add_argument("--library-dir", type=Path, default=default_library_dir())
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
@@ -126,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_id=args.repo_id,
             revision=args.revision,
             repo_type=args.repo_type,
+            expected_commit=args.expected_commit,
             allow_patterns=args.allow,
             ignore_patterns=args.ignore,
             xet_enabled=args.xet,

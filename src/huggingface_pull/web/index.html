@@ -57,9 +57,13 @@
                     <option value="model">model</option>
                     <option value="dataset">dataset</option>
                     <option value="space">space</option>
+                    <option value="kernel">kernel</option>
                   </select>
                 </div>
               </div>
+
+              <label for="expectedCommitInput">Expected commit (optional)</label>
+              <input id="expectedCommitInput" name="expected_commit" autocomplete="off" placeholder="40-character lowercase SHA">
 
               <label for="allowPatternsInput">Allow patterns</label>
               <input id="allowPatternsInput" name="allow_patterns" autocomplete="off" placeholder="*.safetensors, *.json">

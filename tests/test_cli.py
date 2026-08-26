@@ -13,7 +13,9 @@ def test_parser_accepts_repo_revision_and_filters():
             "--ignore",
             "*.bin",
             "--repo-type",
-            "model",
+            "kernel",
+            "--expected-commit",
+            "a" * 40,
             "--max-workers",
             "2",
             "--xet",
@@ -24,7 +26,8 @@ def test_parser_accepts_repo_revision_and_filters():
     assert args.revision == "main"
     assert args.allow == ["*.safetensors"]
     assert args.ignore == ["*.bin"]
-    assert args.repo_type == "model"
+    assert args.repo_type == "kernel"
+    assert args.expected_commit == "a" * 40
     assert args.max_workers == 2
     assert args.xet is True
 
