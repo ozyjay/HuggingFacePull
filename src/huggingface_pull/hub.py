@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import dataclasses
 import fnmatch
+import hashlib
 import json
 import os
 import re
 import shutil
+import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from .app_logging import write_log
@@ -37,6 +39,10 @@ SHARDED_PAYLOAD_RE = re.compile(
     r"^(?P<prefix>.+)-(?P<index>\d{5})-of-(?P<total>\d{5})(?P<suffix>\.[^.]+)$"
 )
 COMMIT_SHA_RE = re.compile(r"^[a-f0-9]{40}$")
+SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+COMPLETION_FORMAT = "huggingfacepull-completion"
+COMPLETION_VERSION = 2
+COMPLETION_VERIFICATIONS = {"sha256", "size_only"}
 _LOGGED_SKIPPED_CACHE_SNAPSHOTS: set[tuple[str, str, str, str]] = set()
 HF_HUB_CACHE = str(default_hf_hub_cache())
 HfApi: Any | None = None
@@ -80,6 +86,7 @@ class HubRef:
     xet_enabled: bool = False
 
     def __post_init__(self) -> None:
+        _validate_repo_id(self.repo_id)
         if self.repo_type not in {"model", "dataset", "space", "kernel"}:
             raise ValueError(f"Unsupported Hugging Face repository type: {self.repo_type}")
         if self.expected_commit is not None and COMMIT_SHA_RE.fullmatch(self.expected_commit) is None:
@@ -105,6 +112,16 @@ def safe_revision_dir_name(revision: str) -> str:
     return safe
 
 
+def _validate_repo_id(repo_id: str) -> None:
+    if not isinstance(repo_id, str) or not repo_id.strip():
+        raise ValueError("Repository ID must be a non-empty string")
+    if "\x00" in repo_id or "\\" in repo_id:
+        raise ValueError("Repository ID must not contain path separators or NUL bytes")
+    parts = repo_id.strip().split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("Repository ID must not contain traversal components")
+
+
 def metadata_path(library_dir: Path, ref: HubRef) -> Path:
     return (
         Path(library_dir)
@@ -112,6 +129,311 @@ def metadata_path(library_dir: Path, ref: HubRef) -> Path:
         / safe_revision_dir_name(ref.revision)
         / ".huggingfacepull.json"
     )
+
+
+def read_completion_marker(marker: Path) -> dict[str, Any]:
+    """Read a legacy marker or validate a versioned completion marker offline."""
+    try:
+        metadata = json.loads(Path(marker).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"Unable to read completion marker {marker}") from error
+    if not isinstance(metadata, dict):
+        raise ValueError("Completion marker must contain a JSON object")
+    if "format" not in metadata and "version" not in metadata:
+        if not isinstance(metadata.get("repo_id"), str) or not isinstance(
+            metadata.get("revision"), str
+        ):
+            raise ValueError("Legacy completion marker is missing repo_id or revision")
+        return metadata
+    return _validate_versioned_marker(metadata)
+
+
+def _validate_versioned_marker(metadata: dict[str, Any]) -> dict[str, Any]:
+    required = {
+        "format",
+        "version",
+        "repo_id",
+        "repo_type",
+        "requested_revision",
+        "revision",
+        "expected_commit",
+        "resolved_revision",
+        "snapshot_path",
+        "xet_enabled",
+        "size",
+        "files",
+    }
+    missing = sorted(required - metadata.keys())
+    if missing:
+        raise ValueError(f"Completion marker is missing required fields: {', '.join(missing)}")
+    if metadata["format"] != COMPLETION_FORMAT:
+        raise ValueError(f"Unsupported completion marker format: {metadata['format']!r}")
+    if metadata["version"] != COMPLETION_VERSION:
+        raise ValueError(f"Unsupported completion marker version: {metadata['version']!r}")
+    _validate_repo_id(metadata["repo_id"])
+    if metadata["repo_type"] not in {"model", "dataset", "space", "kernel"}:
+        raise ValueError("Completion marker contains an unsupported repository type")
+    if not isinstance(metadata["requested_revision"], str) or not metadata["requested_revision"].strip():
+        raise ValueError("Completion marker requested_revision must be a non-empty string")
+    if metadata["revision"] != metadata["requested_revision"]:
+        raise ValueError("Completion marker revision must equal requested_revision")
+    expected_commit = metadata["expected_commit"]
+    if expected_commit is not None and (
+        not isinstance(expected_commit, str) or COMMIT_SHA_RE.fullmatch(expected_commit) is None
+    ):
+        raise ValueError("Completion marker expected_commit must be a 40-character SHA or null")
+    resolved_revision = metadata["resolved_revision"]
+    if not isinstance(resolved_revision, str) or COMMIT_SHA_RE.fullmatch(resolved_revision) is None:
+        raise ValueError("Completion marker resolved_revision must be a 40-character SHA")
+    if not isinstance(metadata["snapshot_path"], str) or not metadata["snapshot_path"].strip():
+        raise ValueError("Completion marker snapshot_path must be a non-empty string")
+    if not isinstance(metadata["xet_enabled"], bool):
+        raise ValueError("Completion marker xet_enabled must be a boolean")
+    if not _is_non_negative_int(metadata["size"]):
+        raise ValueError("Completion marker size must be a non-negative integer")
+    files = metadata["files"]
+    if not isinstance(files, list) or not files:
+        raise ValueError("Completion marker files must be a non-empty array")
+    normalised_files = [_normalise_file_record(file, require_verification=True) for file in files]
+    paths = [file["path"] for file in normalised_files]
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise ValueError("Completion marker files must be unique and sorted by path")
+    if metadata["size"] != sum(file["size"] for file in normalised_files):
+        raise ValueError("Completion marker size must equal the selected-file size total")
+    normalised = dict(metadata)
+    normalised["files"] = normalised_files
+    return normalised
+
+
+def _normalise_file_record(file: Any, *, require_verification: bool) -> dict[str, Any]:
+    if not isinstance(file, dict):
+        raise ValueError("Completion marker file entries must be objects")
+    required = {"path", "size", "blob_id", "lfs_sha256", "lfs_size", "xet_hash"}
+    if require_verification:
+        required.add("verification")
+    missing = sorted(required - file.keys())
+    if missing:
+        raise ValueError(f"Completion marker file entry is missing fields: {', '.join(missing)}")
+    path = _validate_relative_file_path(file["path"])
+    if not _is_non_negative_int(file["size"]):
+        raise ValueError(f"Completion marker file {path} has an invalid size")
+    blob_id = file["blob_id"]
+    if blob_id is not None and (not isinstance(blob_id, str) or not blob_id):
+        raise ValueError(f"Completion marker file {path} has an invalid blob_id")
+    lfs_sha256 = file["lfs_sha256"]
+    lfs_size = file["lfs_size"]
+    if lfs_sha256 is None:
+        if lfs_size is not None:
+            raise ValueError(f"Completion marker file {path} has lfs_size without lfs_sha256")
+    elif not isinstance(lfs_sha256, str) or SHA256_RE.fullmatch(lfs_sha256) is None:
+        raise ValueError(f"Completion marker file {path} has an invalid lfs_sha256")
+    elif not _is_non_negative_int(lfs_size) or lfs_size != file["size"]:
+        raise ValueError(f"Completion marker file {path} has inconsistent LFS size metadata")
+    xet_hash = file["xet_hash"]
+    if xet_hash is not None and (
+        not isinstance(xet_hash, str) or SHA256_RE.fullmatch(xet_hash) is None
+    ):
+        raise ValueError(f"Completion marker file {path} has an invalid xet_hash")
+    normalised = {
+        "path": path,
+        "size": file["size"],
+        "blob_id": blob_id,
+        "lfs_sha256": lfs_sha256,
+        "lfs_size": lfs_size,
+        "xet_hash": xet_hash,
+    }
+    if require_verification:
+        verification = file["verification"]
+        if verification not in COMPLETION_VERIFICATIONS:
+            raise ValueError(f"Completion marker file {path} has an invalid verification status")
+        if verification == "sha256" and lfs_sha256 is None:
+            raise ValueError(f"Completion marker file {path} cannot be SHA-256 verified without LFS metadata")
+        normalised["verification"] = verification
+    return normalised
+
+
+def _validate_relative_file_path(path: Any) -> str:
+    if not isinstance(path, str) or not path or "\\" in path or "\x00" in path:
+        raise ValueError("Repository file path must be a non-empty POSIX relative path")
+    pure_path = PurePosixPath(path)
+    if pure_path.is_absolute() or any(part in {"", ".", ".."} for part in path.split("/")):
+        raise ValueError(f"Repository file path escapes the snapshot: {path!r}")
+    return str(pure_path)
+
+
+def _is_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _write_marker_atomic(marker: Path, metadata: dict[str, Any]) -> None:
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{marker.name}.", suffix=".tmp", dir=marker.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(metadata, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, marker)
+        try:
+            directory_fd = os.open(marker.parent, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                pass
+        finally:
+            os.close(directory_fd)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _safe_snapshot_file_path(snapshot: Path, relative_path: str) -> Path:
+    parts = PurePosixPath(_validate_relative_file_path(relative_path)).parts
+    snapshot_root = snapshot.resolve()
+    candidate = snapshot.joinpath(*parts)
+    try:
+        candidate.parent.resolve().relative_to(snapshot_root)
+    except ValueError as error:
+        raise ValueError(f"Repository file path escapes the snapshot: {relative_path!r}") from error
+    if candidate.is_symlink():
+        target = candidate.resolve()
+        blob_root = snapshot.parent.parent.resolve() / "blobs"
+        try:
+            target.relative_to(blob_root)
+        except ValueError as error:
+            raise ValueError(f"Repository file symlink escapes the cache: {relative_path!r}") from error
+    return candidate
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def upgrade_legacy_markers(library_dir: Path) -> dict[str, list[str]]:
+    """Upgrade legacy markers using local cache metadata only; never contacts the Hub."""
+    upgraded: list[str] = []
+    skipped: list[str] = []
+    for marker in Path(library_dir).glob("*/*/.huggingfacepull.json"):
+        try:
+            raw = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            skipped.append(str(marker))
+            continue
+        if not isinstance(raw, dict):
+            skipped.append(str(marker))
+            continue
+        if raw.get("format") == COMPLETION_FORMAT and raw.get("version") == COMPLETION_VERSION:
+            continue
+        try:
+            metadata = _upgrade_legacy_marker(raw)
+            _write_marker_atomic(marker, metadata)
+        except (OSError, ValueError):
+            skipped.append(str(marker))
+            continue
+        upgraded.append(str(marker))
+    return {"upgraded": upgraded, "skipped": skipped}
+
+
+def _upgrade_legacy_marker(raw: dict[str, Any]) -> dict[str, Any]:
+    repo_id = raw.get("repo_id")
+    revision = raw.get("revision")
+    repo_type = raw.get("repo_type", "model")
+    snapshot_path = raw.get("snapshot_path")
+    expected_commit = raw.get("expected_commit")
+    if not isinstance(revision, str) or not isinstance(snapshot_path, str):
+        raise ValueError("Legacy marker lacks revision or snapshot_path")
+    ref = HubRef(
+        repo_id=repo_id,
+        revision=revision,
+        repo_type=repo_type,
+        expected_commit=expected_commit,
+        xet_enabled=bool(raw.get("xet_enabled", False)),
+    )
+    resolved_revision = raw.get("resolved_revision")
+    if not isinstance(resolved_revision, str) or COMMIT_SHA_RE.fullmatch(resolved_revision) is None:
+        candidate = Path(snapshot_path).name
+        if COMMIT_SHA_RE.fullmatch(candidate) is None:
+            raise ValueError("Legacy marker has no immutable resolved revision")
+        resolved_revision = candidate
+    snapshot = Path(snapshot_path)
+    if snapshot.resolve() != _expected_snapshot_path(ref, resolved_revision).resolve():
+        raise ValueError("Legacy marker snapshot is outside the derived Hugging Face snapshot")
+    legacy_files = raw.get("files")
+    if not isinstance(legacy_files, list) or not legacy_files:
+        raise ValueError("Legacy marker has no selected files")
+    tree_entries = _cached_tree_entries(ref, resolved_revision)
+    upgraded_files = []
+    for legacy_file in legacy_files:
+        if not isinstance(legacy_file, dict):
+            raise ValueError("Legacy marker contains malformed file metadata")
+        path = _validate_relative_file_path(legacy_file.get("path"))
+        tree_entry = tree_entries.get(path, {})
+        size = legacy_file.get("size", tree_entry.get("size"))
+        blob_id = legacy_file.get("blob_id", tree_entry.get("blob_id"))
+        if tree_entry and (
+            (size != tree_entry.get("size"))
+            or (blob_id is not None and blob_id != tree_entry.get("blob_id"))
+        ):
+            raise ValueError("Legacy marker disagrees with cached tree metadata")
+        upgraded_files.append(
+            _normalise_file_record(
+                {
+                    "path": path,
+                    "size": size,
+                    "blob_id": blob_id,
+                    "lfs_sha256": tree_entry.get("lfs_sha256"),
+                    "lfs_size": tree_entry.get("lfs_size"),
+                    "xet_hash": tree_entry.get("xet_hash"),
+                    "verification": "size_only",
+                },
+                require_verification=True,
+            )
+        )
+    upgraded_files.sort(key=lambda file: file["path"])
+    if len({file["path"] for file in upgraded_files}) != len(upgraded_files):
+        raise ValueError("Legacy marker contains duplicate file paths")
+    skip_reason = _snapshot_integrity_skip_reason(snapshot, upgraded_files)
+    if skip_reason is not None:
+        raise ValueError(f"Legacy snapshot is incomplete: {skip_reason['reason']}")
+    return {
+        "format": COMPLETION_FORMAT,
+        "version": COMPLETION_VERSION,
+        "repo_id": ref.repo_id,
+        "requested_revision": ref.revision,
+        "revision": ref.revision,
+        "repo_type": ref.repo_type,
+        "expected_commit": ref.expected_commit,
+        "resolved_revision": resolved_revision,
+        "snapshot_path": str(snapshot),
+        "xet_enabled": ref.xet_enabled,
+        "size": sum(file["size"] for file in upgraded_files),
+        "files": upgraded_files,
+    }
+
+
+def _cached_tree_entries(ref: HubRef, resolved_revision: str) -> dict[str, dict[str, Any]]:
+    snapshot_root = _expected_snapshot_path(ref, resolved_revision).parent.parent
+    tree_path = snapshot_root / "trees" / f"{resolved_revision}.json"
+    try:
+        tree = json.loads(tree_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    files = tree.get("files") if isinstance(tree, dict) else None
+    if not isinstance(tree, dict) or tree.get("format_version") != 1 or not isinstance(files, dict):
+        return {}
+    return {path: value for path, value in files.items() if isinstance(path, str) and isinstance(value, dict)}
 
 
 def search_models(
@@ -201,16 +523,49 @@ def _repo_file_records(api: Any, info: Any, *, ref: HubRef, token: str | None) -
             repo_type=ref.repo_type,
             token=token,
         )
+    elif hasattr(api, "list_repo_tree") and any(
+        getattr(sibling, "xet_hash", None) is None for sibling in siblings
+    ):
+        # model_info() does not consistently expose Xet metadata across supported
+        # huggingface_hub versions. Enrich from the tree when the client can provide it.
+        try:
+            tree = api.list_repo_tree(
+                ref.repo_id,
+                recursive=True,
+                revision=ref.revision,
+                repo_type=ref.repo_type,
+                token=token,
+            )
+        except Exception:
+            tree = []
+        tree_by_path = {
+            getattr(item, "rfilename", None) or getattr(item, "path", None): item
+            for item in tree
+        }
+        siblings = [
+            tree_by_path.get(getattr(item, "rfilename", None) or getattr(item, "path", None), item)
+            for item in siblings
+        ]
     files = []
     for sibling in siblings:
         path = getattr(sibling, "rfilename", None) or getattr(sibling, "path", None)
         if path is None or not hasattr(sibling, "size"):
             continue
+        lfs = getattr(sibling, "lfs", None)
+        if isinstance(lfs, dict):
+            lfs_sha256 = lfs.get("sha256")
+            lfs_size = lfs.get("size")
+        else:
+            lfs_sha256 = getattr(lfs, "sha256", None)
+            lfs_size = getattr(lfs, "size", None)
         files.append(
             {
                 "path": path,
                 "size": getattr(sibling, "size", None),
                 "blob_id": getattr(sibling, "blob_id", None),
+                "lfs_sha256": lfs_sha256,
+                "lfs_size": lfs_size,
+                "xet_hash": getattr(sibling, "xet_hash", None),
             }
         )
     return files
@@ -220,12 +575,8 @@ def installed_models(library_dir: Path) -> list[dict[str, Any]]:
     installed: list[dict[str, Any]] = []
     for marker in Path(library_dir).glob("*/*/.huggingfacepull.json"):
         try:
-            metadata = json.loads(marker.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(metadata, dict):
-            continue
-        if "repo_id" not in metadata or "revision" not in metadata:
+            metadata = read_completion_marker(marker)
+        except ValueError:
             continue
         metadata = _metadata_with_current_cache_path(metadata)
         skip_reason = _installed_metadata_skip_reason(metadata)
@@ -256,6 +607,10 @@ def _metadata_with_current_cache_path(metadata: dict[str, Any]) -> dict[str, Any
 
     repo_id = metadata.get("repo_id")
     if not isinstance(repo_id, str) or not repo_id.strip():
+        return metadata
+    try:
+        _validate_repo_id(repo_id)
+    except ValueError:
         return metadata
     prefix = {
         "dataset": "datasets",
@@ -469,6 +824,22 @@ def _installed_metadata_skip_reason(metadata: dict[str, Any]) -> dict[str, Any] 
     snapshot_path = metadata.get("snapshot_path")
     if not isinstance(snapshot_path, str) or not snapshot_path.strip():
         return None
+    if metadata.get("format") == COMPLETION_FORMAT:
+        try:
+            expected_snapshot = _expected_snapshot_path(
+                HubRef(
+                    repo_id=metadata["repo_id"],
+                    revision=metadata["requested_revision"],
+                    repo_type=metadata["repo_type"],
+                    expected_commit=metadata["expected_commit"],
+                    xet_enabled=metadata["xet_enabled"],
+                ),
+                metadata["resolved_revision"],
+            )
+            if Path(snapshot_path).resolve() != expected_snapshot.resolve():
+                return {"reason": "outside_derived_snapshot", "path": Path(snapshot_path)}
+        except (KeyError, TypeError, ValueError):
+            return {"reason": "invalid_completion_marker"}
     return _snapshot_integrity_skip_reason(Path(snapshot_path), metadata.get("files"))
 
 
@@ -488,7 +859,10 @@ def _snapshot_integrity_skip_reason(
         relative_path = file.get("path")
         if not isinstance(relative_path, str) or not relative_path.strip():
             continue
-        path = snapshot / relative_path
+        try:
+            path = _safe_snapshot_file_path(snapshot, relative_path)
+        except ValueError:
+            return {"reason": "path_traversal", "path": snapshot / relative_path}
         if not path.exists():
             return {
                 "reason": "broken_symlink" if path.is_symlink() else "missing_file",
@@ -831,16 +1205,28 @@ def pull_snapshot(
             token=token,
         )
     resolved_revision = str(getattr(info, "sha", "") or "")
+    if COMMIT_SHA_RE.fullmatch(resolved_revision) is None:
+        raise RuntimeError("Hub did not return a valid immutable resolved commit")
     if ref.expected_commit is not None and resolved_revision != ref.expected_commit:
         raise RuntimeError(
             f"Resolved commit {resolved_revision or 'unknown'} does not match expected commit "
             f"{ref.expected_commit}"
         )
+    resolved_ref = dataclasses.replace(ref, revision=resolved_revision)
     files = _filter_repo_files(
-        _repo_file_records(api, info, ref=ref, token=token),
+        _repo_file_records(api, info, ref=resolved_ref, token=token),
         allow_patterns=ref.allow_patterns,
         ignore_patterns=ref.ignore_patterns,
     )
+    try:
+        files = [_normalise_file_record(file, require_verification=False) for file in files]
+    except ValueError as error:
+        raise RuntimeError(f"Invalid selected file metadata: {error}") from error
+    files.sort(key=lambda file: file["path"])
+    if not files:
+        raise RuntimeError("No repository files matched the selected download patterns")
+    if len({file["path"] for file in files}) != len(files):
+        raise RuntimeError("Selected repository file metadata contains duplicate paths")
     if progress is not None:
         progress(
             {
@@ -854,7 +1240,7 @@ def pull_snapshot(
     snapshot_path = Path(
         _snapshot_download_func()(
             repo_id=ref.repo_id,
-            revision=ref.revision,
+            revision=resolved_revision,
             repo_type=None if ref.repo_type == "model" else ref.repo_type,
             cache_dir=Path(HF_HUB_CACHE),
             endpoint=endpoint,
@@ -876,6 +1262,12 @@ def pull_snapshot(
     elif os.environ.get("HF_HUB_DISABLE_XET") != "1":
         raise RuntimeError("HF_HUB_DISABLE_XET must remain set to 1 when Xet is disabled")
 
+    expected_snapshot = _expected_snapshot_path(ref, resolved_revision)
+    if snapshot_path.resolve() != expected_snapshot.resolve():
+        raise RuntimeError(
+            f"Downloaded snapshot path {snapshot_path} is outside the derived Hugging Face snapshot"
+        )
+
     skip_reason = _snapshot_integrity_skip_reason(snapshot_path, files)
     if skip_reason is not None:
         _log(
@@ -889,20 +1281,37 @@ def pull_snapshot(
         detail = f" at {skip_reason['path']}" if "path" in skip_reason else ""
         raise RuntimeError(f"Downloaded snapshot is incomplete: {reason}{detail}")
 
-    metadata_dir.mkdir(parents=True, exist_ok=True)
+    completed_files = []
+    for file in files:
+        completed = dict(file)
+        if file["lfs_sha256"] is None:
+            completed["verification"] = "size_only"
+        else:
+            path = _safe_snapshot_file_path(snapshot_path, file["path"])
+            actual_sha256 = _sha256_file(path)
+            if actual_sha256 != file["lfs_sha256"]:
+                raise RuntimeError(
+                    f"Downloaded snapshot checksum mismatch at {path}: expected "
+                    f"{file['lfs_sha256']}, got {actual_sha256}"
+                )
+            completed["verification"] = "sha256"
+        completed_files.append(completed)
+
     metadata = {
+        "format": COMPLETION_FORMAT,
+        "version": COMPLETION_VERSION,
         "repo_id": ref.repo_id,
+        "requested_revision": ref.revision,
         "revision": ref.revision,
         "repo_type": ref.repo_type,
+        "expected_commit": ref.expected_commit,
+        "resolved_revision": resolved_revision,
         "snapshot_path": str(snapshot_path),
-        "size": directory_size(snapshot_path),
-        "files": files,
+        "size": sum(file["size"] for file in completed_files),
+        "files": completed_files,
         "xet_enabled": ref.xet_enabled,
     }
-    if ref.expected_commit is not None:
-        metadata["expected_commit"] = ref.expected_commit
-        metadata["resolved_revision"] = resolved_revision or snapshot_path.name
-    marker.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
+    _write_marker_atomic(marker, metadata)
 
     if progress is not None:
         progress(
@@ -913,6 +1322,22 @@ def pull_snapshot(
             }
         )
     return snapshot_path
+
+
+def _expected_snapshot_path(ref: HubRef, resolved_revision: str) -> Path:
+    if COMMIT_SHA_RE.fullmatch(resolved_revision) is None:
+        raise ValueError("Resolved revision must be a 40-character lowercase hexadecimal SHA")
+    prefix = {
+        "dataset": "datasets",
+        "space": "spaces",
+        "kernel": "kernels",
+    }.get(ref.repo_type, "models")
+    return (
+        Path(HF_HUB_CACHE)
+        / f"{prefix}--{safe_repo_dir_name(ref.repo_id)}"
+        / "snapshots"
+        / resolved_revision
+    )
 
 
 def _filter_repo_files(

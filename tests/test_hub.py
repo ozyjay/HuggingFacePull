@@ -9,6 +9,8 @@ import pytest
 
 import huggingface_pull.hub as hub
 
+TEST_COMMIT = "a" * 40
+
 
 def install_fake_hub(monkeypatch, files, snapshot_func=None, endpoint="https://huggingface.co"):
     cache_dir = Path(tempfile.mkdtemp(prefix="hfpull-test-cache-", dir="/tmp"))
@@ -19,18 +21,26 @@ def install_fake_hub(monkeypatch, files, snapshot_func=None, endpoint="https://h
 
         def model_info(self, repo_id, revision, files_metadata, token):
             return SimpleNamespace(
+                sha=TEST_COMMIT,
                 siblings=[
                     SimpleNamespace(
                         rfilename=file["path"],
                         size=file.get("size"),
                         blob_id=file.get("blob_id"),
+                        lfs=file.get("lfs"),
+                        xet_hash=file.get("xet_hash"),
                     )
                     for file in files
                 ]
             )
 
     def default_snapshot_download(**kwargs):
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = (
+            Path(kwargs["cache_dir"])
+            / "models--Qwen--Qwen3"
+            / "snapshots"
+            / kwargs["revision"]
+        )
         for file in files:
             path = local_dir / file["path"]
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -40,6 +50,15 @@ def install_fake_hub(monkeypatch, files, snapshot_func=None, endpoint="https://h
     monkeypatch.setattr(hub, "HfApi", FakeApi)
     monkeypatch.setattr(hub, "snapshot_download", snapshot_func or default_snapshot_download)
     monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache_dir))
+
+
+def fake_snapshot_path(kwargs):
+    return (
+        Path(kwargs["cache_dir"])
+        / "models--Qwen--Qwen3"
+        / "snapshots"
+        / kwargs["revision"]
+    )
 
 
 def test_canonical_ref_normalises_revision_repo_type_and_filters():
@@ -540,6 +559,7 @@ def test_repo_files_maps_model_siblings(monkeypatch):
             assert files_metadata is True
             assert token == "secret"
             return SimpleNamespace(
+                sha=TEST_COMMIT,
                 siblings=[
                     SimpleNamespace(rfilename="config.json", size=20, blob_id="abc"),
                     SimpleNamespace(rfilename="model.safetensors", size=120, blob_id="def"),
@@ -556,8 +576,8 @@ def test_repo_files_maps_model_siblings(monkeypatch):
         "repo_id": "Qwen/Qwen3",
         "revision": "main",
         "files": [
-            {"path": "config.json", "size": 20, "blob_id": "abc"},
-            {"path": "model.safetensors", "size": 120, "blob_id": "def"},
+            {"path": "config.json", "size": 20, "blob_id": "abc", "lfs_sha256": None, "lfs_size": None, "xet_hash": None},
+            {"path": "model.safetensors", "size": 120, "blob_id": "def", "lfs_sha256": None, "lfs_size": None, "xet_hash": None},
         ],
     }
 
@@ -596,6 +616,7 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
             assert files_metadata is True
             assert token == "secret"
             return SimpleNamespace(
+                sha=TEST_COMMIT,
                 siblings=[
                     SimpleNamespace(rfilename="config.json", size=2, blob_id="cfg"),
                     SimpleNamespace(rfilename="weights.bin", size=7, blob_id="weights"),
@@ -606,7 +627,12 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
     def fake_snapshot_download(**kwargs):
         calls.append(kwargs)
         assert "local_dir" not in kwargs
-        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir = (
+            Path(kwargs["cache_dir"])
+            / "models--Qwen--Qwen3"
+            / "snapshots"
+            / kwargs["revision"]
+        )
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         (snapshot_dir / "weights.bin").write_bytes(b"1234567")
         return str(snapshot_dir)
@@ -630,13 +656,13 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
         progress=events.append,
     )
 
-    target = cache_dir / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+    target = cache_dir / "models--Qwen--Qwen3" / "snapshots" / TEST_COMMIT
     marker = hub.metadata_path(tmp_path, ref)
     assert snapshot_path == target
     assert calls == [
         {
             "repo_id": "Qwen/Qwen3",
-            "revision": "v1",
+            "revision": TEST_COMMIT,
             "repo_type": None,
             "cache_dir": cache_dir,
             "endpoint": "https://hf.example",
@@ -650,12 +676,25 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
     assert calls[0]["tqdm_class"] is not None
     metadata = json.loads(marker.read_text(encoding="utf-8"))
     assert metadata == {
+        "format": "huggingfacepull-completion",
+        "version": 2,
         "repo_id": "Qwen/Qwen3",
+        "requested_revision": "v1",
         "revision": "v1",
         "repo_type": "model",
+        "expected_commit": None,
+        "resolved_revision": TEST_COMMIT,
         "snapshot_path": str(target),
         "size": 7,
-        "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
+        "files": [{
+            "path": "weights.bin",
+            "size": 7,
+            "blob_id": "weights",
+            "lfs_sha256": None,
+            "lfs_size": None,
+            "xet_hash": None,
+            "verification": "size_only",
+        }],
         "xet_enabled": False,
     }
     assert sorted(path.name for path in marker.parent.iterdir()) == [".huggingfacepull.json"]
@@ -666,7 +705,7 @@ def test_pull_snapshot_uses_hf_cache_and_writes_metadata_without_network(monkeyp
             "repo_id": "Qwen/Qwen3",
             "revision": "v1",
             "total_bytes": 7,
-            "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights"}],
+            "files": [{"path": "weights.bin", "size": 7, "blob_id": "weights", "lfs_sha256": None, "lfs_size": None, "xet_hash": None}],
         },
         {"type": "model-complete", "repo_id": "Qwen/Qwen3", "snapshot_path": str(target)},
     ]
@@ -679,7 +718,7 @@ def test_pull_snapshot_rejects_missing_expected_file_without_metadata(
     log_events = []
 
     def fake_snapshot_download(**kwargs):
-        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / kwargs["revision"]
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         (snapshot_dir / "config.json").write_text("{}", encoding="utf-8")
         return str(snapshot_dir)
@@ -711,9 +750,9 @@ def test_pull_snapshot_rejects_missing_expected_file_without_metadata(
             {
                 "repo_id": "Qwen/Qwen3",
                 "revision": "main",
-                "snapshot_path": cache_dir / "models--Qwen--Qwen3" / "snapshots" / "abc123",
+                "snapshot_path": cache_dir / "models--Qwen--Qwen3" / "snapshots" / TEST_COMMIT,
                 "reason": "missing_file",
-                "path": cache_dir / "models--Qwen--Qwen3" / "snapshots" / "abc123" / "weights.bin",
+                "path": cache_dir / "models--Qwen--Qwen3" / "snapshots" / TEST_COMMIT / "weights.bin",
             },
         )
     ]
@@ -723,7 +762,7 @@ def test_pull_snapshot_rejects_size_mismatch_without_metadata(monkeypatch, tmp_p
     cache_dir = tmp_path / "hf-cache"
 
     def fake_snapshot_download(**kwargs):
-        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / kwargs["revision"]
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         (snapshot_dir / "weights.bin").write_bytes(b"short")
         return str(snapshot_dir)
@@ -787,7 +826,7 @@ def test_pull_snapshot_passes_none_for_empty_snapshot_patterns(monkeypatch, tmp_
 
     def fake_snapshot_download(**kwargs):
         calls.append(kwargs)
-        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / "abc123"
+        snapshot_dir = Path(kwargs["cache_dir"]) / "models--Qwen--Qwen3" / "snapshots" / kwargs["revision"]
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         (snapshot_dir / "config.json").write_text("{}", encoding="utf-8")
         return str(snapshot_dir)
@@ -811,7 +850,7 @@ def test_pull_snapshot_disables_xet_by_default_before_lazy_hub_import(monkeypatc
 
     def fake_snapshot_download(**kwargs):
         seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"data")
         return str(local_dir)
@@ -834,7 +873,7 @@ def test_pull_snapshot_overrides_existing_xet_setting_by_default(monkeypatch, tm
 
     def fake_snapshot_download(**kwargs):
         seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"data")
         return str(local_dir)
@@ -857,7 +896,7 @@ def test_pull_snapshot_can_enable_xet(monkeypatch, tmp_path):
 
     def fake_snapshot_download(**kwargs):
         seen.append(os.environ.get("HF_HUB_DISABLE_XET"))
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"data")
         return str(local_dir)
@@ -889,7 +928,7 @@ def test_pull_snapshot_emits_aggregate_byte_progress_from_snapshot_tqdm(monkeypa
         progress_bar.update(10)
         progress_bar.close()
 
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"123")
         return str(local_dir)
@@ -952,7 +991,7 @@ def test_pull_snapshot_emits_fetch_progress_from_snapshot_tqdm(monkeypatch, tmp_
         progress_bar.refresh()
         progress_bar.close()
 
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"123")
         return str(local_dir)
@@ -988,7 +1027,7 @@ def test_pull_snapshot_throttles_rapid_byte_progress(monkeypatch, tmp_path):
             progress_bar.update(10)
         progress_bar.close()
 
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"x" * 40)
         return str(local_dir)
@@ -1040,7 +1079,7 @@ def test_pull_snapshot_stops_after_snapshot_progress_when_requested(monkeypatch,
         stop_requested = True
         progress_bar.update(10)
 
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"x" * 20)
         return str(local_dir)
@@ -1065,7 +1104,7 @@ def test_pull_snapshot_stops_after_snapshot_progress_when_requested(monkeypatch,
 
 def test_pull_snapshot_raises_stop_after_file_after_metadata(monkeypatch, tmp_path):
     def fake_snapshot_download(**kwargs):
-        local_dir = Path(kwargs.get("local_dir") or kwargs["cache_dir"])
+        local_dir = fake_snapshot_path(kwargs)
         local_dir.mkdir(parents=True, exist_ok=True)
         (local_dir / "weights.bin").write_bytes(b"data")
         return str(local_dir)
@@ -1411,6 +1450,212 @@ def test_directory_size_sums_nested_files(tmp_path):
     (tmp_path / "nested" / "b.bin").write_bytes(b"45")
 
     assert hub.directory_size(tmp_path) == 5
+
+
+def test_pull_snapshot_records_and_verifies_lfs_and_xet_metadata(monkeypatch, tmp_path):
+    content = b"verified"
+    sha256 = __import__("hashlib").sha256(content).hexdigest()
+    cache = tmp_path / "hub"
+    calls = []
+
+    class FakeApi:
+        def __init__(self, endpoint):
+            pass
+
+        def model_info(self, *args, **kwargs):
+            return SimpleNamespace(
+                sha=TEST_COMMIT,
+                siblings=[
+                    SimpleNamespace(
+                        rfilename="weights.gguf",
+                        size=len(content),
+                        blob_id="b" * 40,
+                        lfs=SimpleNamespace(sha256=sha256, size=len(content)),
+                        xet_hash="c" * 64,
+                    )
+                ],
+            )
+
+    def fake_download(**kwargs):
+        calls.append(kwargs)
+        snapshot = cache / "models--Qwen--Qwen3" / "snapshots" / kwargs["revision"]
+        snapshot.mkdir(parents=True)
+        (snapshot / "weights.gguf").write_bytes(content)
+        return str(snapshot)
+
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+    monkeypatch.setattr(hub, "snapshot_download", fake_download)
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+
+    ref = hub.HubRef(repo_id="Qwen/Qwen3", revision="main")
+    hub.pull_snapshot(ref, library_dir=tmp_path / "library")
+
+    marker = hub.read_completion_marker(hub.metadata_path(tmp_path / "library", ref))
+    assert calls[0]["revision"] == TEST_COMMIT
+    assert marker["resolved_revision"] == TEST_COMMIT
+    assert marker["files"] == [{
+        "path": "weights.gguf",
+        "size": len(content),
+        "blob_id": "b" * 40,
+        "lfs_sha256": sha256,
+        "lfs_size": len(content),
+        "xet_hash": "c" * 64,
+        "verification": "sha256",
+    }]
+
+
+def test_pull_snapshot_rejects_lfs_checksum_mismatch(monkeypatch, tmp_path):
+    cache = tmp_path / "hub"
+    expected_sha256 = "a" * 64
+
+    class FakeApi:
+        def __init__(self, endpoint):
+            pass
+
+        def model_info(self, *args, **kwargs):
+            return SimpleNamespace(
+                sha=TEST_COMMIT,
+                siblings=[
+                    SimpleNamespace(
+                        rfilename="weights.gguf",
+                        size=4,
+                        blob_id="b" * 40,
+                        lfs=SimpleNamespace(sha256=expected_sha256, size=4),
+                    )
+                ],
+            )
+
+    def fake_download(**kwargs):
+        snapshot = cache / "models--Qwen--Qwen3" / "snapshots" / kwargs["revision"]
+        snapshot.mkdir(parents=True)
+        (snapshot / "weights.gguf").write_bytes(b"nope")
+        return str(snapshot)
+
+    monkeypatch.setattr(hub, "HfApi", FakeApi)
+    monkeypatch.setattr(hub, "snapshot_download", fake_download)
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+    ref = hub.HubRef(repo_id="Qwen/Qwen3")
+
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        hub.pull_snapshot(ref, library_dir=tmp_path / "library")
+    assert not hub.metadata_path(tmp_path / "library", ref).exists()
+
+
+def test_pull_snapshot_rejects_empty_or_traversal_selection(monkeypatch, tmp_path):
+    install_fake_hub(monkeypatch, [{"path": "../outside", "size": 1, "blob_id": "bad"}])
+    with pytest.raises(RuntimeError, match="Invalid selected file metadata"):
+        hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
+
+    install_fake_hub(monkeypatch, [{"path": "weights.gguf", "size": 1, "blob_id": "good"}])
+    with pytest.raises(RuntimeError, match="No repository files matched"):
+        hub.pull_snapshot(
+            hub.HubRef(repo_id="Qwen/Qwen3", allow_patterns=["*.bin"]),
+            library_dir=tmp_path,
+        )
+
+
+def test_pull_snapshot_rejects_malformed_integrity_metadata_before_download(monkeypatch, tmp_path):
+    install_fake_hub(
+        monkeypatch,
+        [{"path": "weights.gguf", "size": 1, "blob_id": "blob", "lfs": {"sha256": "bad", "size": 1}}],
+        lambda **kwargs: pytest.fail("malformed metadata must prevent download"),
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid selected file metadata"):
+        hub.pull_snapshot(hub.HubRef(repo_id="Qwen/Qwen3"), library_dir=tmp_path)
+
+
+def test_pull_snapshot_records_multiple_selected_files_and_selected_size(monkeypatch, tmp_path):
+    install_fake_hub(
+        monkeypatch,
+        [
+            {"path": "z.gguf", "size": 2, "blob_id": "z"},
+            {"path": "a.gguf", "size": 1, "blob_id": "a"},
+        ],
+    )
+    ref = hub.HubRef(repo_id="Qwen/Qwen3")
+
+    hub.pull_snapshot(ref, library_dir=tmp_path / "library")
+
+    marker = hub.read_completion_marker(hub.metadata_path(tmp_path / "library", ref))
+    assert marker["size"] == 3
+    assert [file["path"] for file in marker["files"]] == ["a.gguf", "z.gguf"]
+
+
+def test_hub_ref_rejects_repository_path_traversal():
+    with pytest.raises(ValueError, match="traversal"):
+        hub.HubRef(repo_id="..")
+
+
+def test_read_completion_marker_supports_legacy_fixture_and_rejects_unknown_version(tmp_path):
+    legacy = tmp_path / "legacy.json"
+    legacy.write_text(json.dumps({
+        "expected_commit": TEST_COMMIT,
+        "files": [{"path": "weights.gguf", "size": 2, "blob_id": "blob"}],
+        "repo_id": "Qwen/Qwen3",
+        "resolved_revision": TEST_COMMIT,
+        "revision": "main",
+        "size": 2,
+        "snapshot_path": "/cache/snapshot",
+        "xet_enabled": False,
+    }), encoding="utf-8")
+    assert hub.read_completion_marker(legacy)["expected_commit"] == TEST_COMMIT
+
+    unknown = tmp_path / "unknown.json"
+    unknown.write_text(json.dumps({"format": hub.COMPLETION_FORMAT, "version": 999}), encoding="utf-8")
+    with pytest.raises(ValueError, match="missing required fields"):
+        hub.read_completion_marker(unknown)
+
+
+def test_atomic_marker_write_preserves_previous_marker_when_replace_fails(monkeypatch, tmp_path):
+    marker = tmp_path / ".huggingfacepull.json"
+    marker.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(hub.os, "replace", lambda *_: (_ for _ in ()).throw(OSError("nope")))
+
+    with pytest.raises(OSError, match="nope"):
+        hub._write_marker_atomic(marker, {"value": "new"})
+    assert marker.read_text(encoding="utf-8") == "old\n"
+    assert list(tmp_path.glob(".huggingfacepull.json.*.tmp")) == []
+
+
+def test_upgrade_legacy_marker_enriches_cached_tree_without_rehashing(monkeypatch, tmp_path):
+    cache = tmp_path / "hub"
+    snapshot = cache / "models--Qwen--Qwen3" / "snapshots" / TEST_COMMIT
+    snapshot.mkdir(parents=True)
+    (snapshot / "weights.gguf").write_bytes(b"data")
+    tree = cache / "models--Qwen--Qwen3" / "trees" / f"{TEST_COMMIT}.json"
+    tree.parent.mkdir(parents=True)
+    tree.write_text(json.dumps({
+        "format_version": 1,
+        "files": {
+            "weights.gguf": {
+                "size": 4,
+                "blob_id": "b" * 40,
+                "lfs_sha256": "c" * 64,
+                "lfs_size": 4,
+                "xet_hash": "d" * 64,
+            }
+        },
+    }), encoding="utf-8")
+    monkeypatch.setattr(hub, "HF_HUB_CACHE", str(cache))
+    ref = hub.HubRef(repo_id="Qwen/Qwen3")
+    marker = hub.metadata_path(tmp_path / "library", ref)
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({
+        "repo_id": ref.repo_id,
+        "revision": ref.revision,
+        "repo_type": ref.repo_type,
+        "snapshot_path": str(snapshot),
+        "files": [{"path": "weights.gguf", "size": 4, "blob_id": "b" * 40}],
+        "xet_enabled": False,
+    }), encoding="utf-8")
+
+    assert hub.upgrade_legacy_markers(tmp_path / "library") == {"upgraded": [str(marker)], "skipped": []}
+    upgraded = hub.read_completion_marker(marker)
+    assert upgraded["files"][0]["lfs_sha256"] == "c" * 64
+    assert upgraded["files"][0]["verification"] == "size_only"
+
+
 def test_kernel_ref_requires_a_valid_expected_commit():
     with pytest.raises(ValueError, match="Expected commit"):
         hub.HubRef(

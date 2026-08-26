@@ -11,7 +11,8 @@ import uvicorn
 from .api import create_app
 from .app_logging import write_log
 from .config import DEFAULT_ENDPOINT, default_library_dir, default_max_workers
-from .hub import HubRef, cleanup_library, force_disable_xet, pull_snapshot
+from .hub import HubRef, cleanup_library, force_disable_xet, pull_snapshot, upgrade_legacy_markers
+from .presets import PRESETS, get_preset
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,6 +73,27 @@ def build_web_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_upgrade_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Upgrade legacy HuggingFacePull completion markers without network access."
+    )
+    parser.add_argument("--library-dir", type=Path, default=default_library_dir())
+    return parser
+
+
+def build_preset_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Use a reviewed HuggingFacePull acquisition preset.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("list", help="List available acquisition presets.")
+    pull = commands.add_parser("pull", help="Download a reviewed acquisition preset.")
+    pull.add_argument("name", choices=sorted(PRESETS))
+    pull.add_argument("--library-dir", type=Path, default=default_library_dir())
+    pull.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    pull.add_argument("--max-workers", type=int, default=default_max_workers())
+    pull.add_argument("--dry-run", action="store_true")
+    return parser
+
+
 def _browser_url(host: str, port: int) -> str:
     browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     if ":" in browser_host and not browser_host.startswith("["):
@@ -102,6 +124,33 @@ def _log_pre_launch_diagnostics() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["upgrade-metadata"]:
+        args = build_upgrade_parser().parse_args(argv[1:])
+        report = upgrade_legacy_markers(args.library_dir.expanduser())
+        print(f"Upgraded: {len(report['upgraded'])}; skipped: {len(report['skipped'])}")
+        return 0
+
+    if argv[:1] == ["preset"]:
+        args = build_preset_parser().parse_args(argv[1:])
+        if args.command == "list":
+            for preset in PRESETS.values():
+                print(f"{preset.name}: {preset.description}")
+            return 0
+        preset = get_preset(args.name)
+        try:
+            snapshot_path = pull_snapshot(
+                preset.ref,
+                library_dir=args.library_dir.expanduser(),
+                endpoint=args.endpoint,
+                dry_run=args.dry_run,
+                max_workers=args.max_workers,
+            )
+        except Exception as error:
+            print(f"Error: {error}", file=sys.stderr)
+            return 1
+        print(snapshot_path)
+        return 0
+
     if argv[:1] == ["gc"]:
         args = build_gc_parser().parse_args(argv[1:])
         try:

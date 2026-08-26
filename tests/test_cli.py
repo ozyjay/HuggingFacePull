@@ -127,6 +127,36 @@ def test_main_passes_xet_flag(monkeypatch, tmp_path):
     assert calls == [True]
 
 
+def test_preset_pull_uses_immutable_allowlisted_ref(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_pull_snapshot(ref, library_dir, **kwargs):
+        calls.append((ref, library_dir, kwargs))
+        return tmp_path / "snapshot"
+
+    monkeypatch.setattr(cli, "pull_snapshot", fake_pull_snapshot)
+
+    assert cli.main([
+        "preset", "pull", "qwen3.5-0.8b-q8_0", "--library-dir", str(tmp_path), "--dry-run"
+    ]) == 0
+    ref, library_dir, kwargs = calls[0]
+    assert ref.expected_commit == ref.revision
+    assert ref.allow_patterns == ("Qwen_Qwen3.5-0.8B-Q8_0.gguf",)
+    assert library_dir == tmp_path
+    assert kwargs["dry_run"] is True
+
+
+def test_upgrade_metadata_command_reports_result(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        cli,
+        "upgrade_legacy_markers",
+        lambda library_dir: {"upgraded": [str(library_dir / "one")], "skipped": []},
+    )
+
+    assert cli.main(["upgrade-metadata", "--library-dir", str(tmp_path)]) == 0
+    assert capsys.readouterr().out.strip() == "Upgraded: 1; skipped: 0"
+
+
 def test_gc_calls_cleanup(monkeypatch, tmp_path):
     calls = []
 

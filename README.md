@@ -137,6 +137,72 @@ hfpull kernels-community/finegrained-fp8 --repo-type kernel --revision v3 \
 The request fails before download if the tag resolves to a different commit. The installed
 metadata records both the requested tag and verified resolved revision.
 
+## Reviewed Qwen3.5 Q8_0 presets
+
+HuggingFacePull provides acquisition-only presets for the approved local Qwen3.5
+Q8_0 GGUF files. Each preset pins both the requested revision and expected commit,
+selects exactly one GGUF file, and uses the application's default non-Xet HTTP
+transfer path. Runtime selection and execution remain the responsibility of
+downstream applications.
+
+```bash
+hfpull preset list
+hfpull preset pull qwen3.5-0.8b-q8_0
+hfpull preset pull qwen3.5-2b-q8_0
+hfpull preset pull qwen3.5-4b-q8_0
+hfpull preset pull qwen3.5-9b-q8_0
+```
+
+| Preset | Repository | File | Pinned commit |
+|---|---|---|---|
+| `qwen3.5-0.8b-q8_0` | `bartowski/Qwen_Qwen3.5-0.8B-GGUF` | `Qwen_Qwen3.5-0.8B-Q8_0.gguf` | `f36b1ea49a332ede8fe5f389bbf5b3575ef71f48` |
+| `qwen3.5-2b-q8_0` | `bartowski/Qwen_Qwen3.5-2B-GGUF` | `Qwen_Qwen3.5-2B-Q8_0.gguf` | `7d26695454df6de5fbcce2e58681e62dae06ce43` |
+| `qwen3.5-4b-q8_0` | `bartowski/Qwen_Qwen3.5-4B-GGUF` | `Qwen_Qwen3.5-4B-Q8_0.gguf` | `4168f45a16a1290d65a4ec0fa312ae917a4c15d6` |
+| `qwen3.5-9b-q8_0` | `bartowski/Qwen_Qwen3.5-9B-GGUF` | `Qwen_Qwen3.5-9B-Q8_0.gguf` | `182be2fd6c7bc44887d88a91cb03ff009cc9f549` |
+
+## Completion markers
+
+Each completed pull writes `.huggingfacepull.json` in the configured library.
+New markers use the versioned `huggingfacepull-completion` format, version 2.
+They are written atomically only after every selected file exists, has the
+recorded size, and — when Hub LFS SHA-256 metadata is available — has been
+hashed and checked locally.
+
+The mandatory top-level fields are `format`, `version`, `repo_id`, `repo_type`,
+`requested_revision`, `revision`, `expected_commit`, `resolved_revision`,
+`snapshot_path`, `xet_enabled`, `size`, and `files`. `revision` is retained for
+legacy consumers and equals `requested_revision`. `resolved_revision` is always
+the immutable 40-character commit used for tree inspection and downloading.
+`size` is the sum of the selected files, not the whole cache snapshot.
+
+Every selected file entry contains `path`, `size`, `blob_id`, `lfs_sha256`,
+`lfs_size`, `xet_hash`, and `verification`. Unavailable metadata is represented
+as `null`. `verification` is `sha256` only when the local content matched the
+recorded LFS SHA-256; otherwise it is `size_only`. `blob_id` and `xet_hash` are
+identifiers, not interchangeable content checksums.
+
+Consumers can locate markers under:
+
+```text
+<library>/<repo-id-with-slashes-replaced-by-->/<requested-revision>/.huggingfacepull.json
+```
+
+They can parse and validate a v2 marker without network access using the marker,
+the indicated snapshot, and the recorded file sizes and SHA-256 values. Markers
+without `format` and `version` are legacy markers and remain readable. Unknown
+marker formats or versions are rejected rather than guessed.
+
+To upgrade existing markers without downloading or rehashing files, use:
+
+```bash
+hfpull upgrade-metadata
+```
+
+The upgrade is best-effort. It enriches entries from local Hugging Face cached
+tree metadata when present, preserves `size_only` verification for legacy
+content, and skips markers that cannot be safely tied to an immutable cache
+snapshot.
+
 ## Cleanup
 
 ```bash

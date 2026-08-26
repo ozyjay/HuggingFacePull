@@ -14,9 +14,11 @@ from .hub import (
     metadata_path,
     partial_cached_hub_models,
     pull_snapshot,
+    read_completion_marker,
     remove_installed_model,
     repo_files,
     search_models,
+    upgrade_legacy_markers,
 )
 
 __all__ = [
@@ -33,7 +35,9 @@ __all__ = [
     "metadata_path",
     "partial_cached_hub_models",
     "pull_snapshot",
+    "read_completion_marker",
     "remove_installed_model",
     "repo_files",
     "search_models",
+    "upgrade_legacy_markers",
 ]
